@@ -1,0 +1,22 @@
+version: '{build}'
+branckes:
+    only:
+    - master
+image:
+- Visual Studio 2017
+configuration:
+- RelWithDebInfo
+platform:
+- x64
+
+before_build:
+- cmd: |-
+    cd llvm-project
+    mkdir build
+    cd build
+    cmake --version
+    export CC=cl.exe
+    export CXX=cl.exe
+    cmake -G "CodeBlocks - Unix Makefiles" ../llvm -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra"
+    make clang-format
+     
