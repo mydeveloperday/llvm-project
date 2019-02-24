@@ -1,5 +1,5 @@
 version: '{build}'
-branckes:
+branches:
     only:
     - master
 image:
