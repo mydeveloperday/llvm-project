@@ -11,7 +11,7 @@ platform:
 
 before_build:
 - cmd: |-
-    cd projects
+    cd c:\projects
     cd llvm-project
     mkdir build
     cd build
