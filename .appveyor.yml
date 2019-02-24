@@ -25,8 +25,8 @@ platform:
 - x64
 
 before_build:
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
 - cmd: |-
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
     cd c:\projects
     cd llvm-project
     mkdir build
