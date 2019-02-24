@@ -33,4 +33,22 @@ before_build:
     cd build
     cmake --version
     %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/build.sh"
+
+build_script:
+    echo "Build Script"
+
+artifacts:
+    - path: c:/projects/llvm-project/build/RelWithDebInfo/*
+      name: ClangBinaries 
+
+after_build:
+    echo "After Build"
      
+before_test:
+    echo "Before Test"
+
+test_script:
+    echo "Test Script"
+
+after_test:
+    echo "After Test"
