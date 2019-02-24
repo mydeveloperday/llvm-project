@@ -1,4 +1,19 @@
 version: '{build}'
+
+environment:
+    global:
+        CYG_ROOT: C:\cygwin64
+        CYG_MIRROR: http://cygwin.mirror.constant.com
+        CYG_CACHE: C:\cygwin64\var\cache\setup
+        CYG_BASH: C:\cygwin64\bin\bash
+
+cache:
+  - '%CYG_CACHE%'
+
+install:
+    - '%CYG_ROOT%\setup-x86_64.exe --quiet-mode --no-shortcuts --upgrade-also --packages autoconf,autogen,automake,cygwin-devel,git,gcc-core,gcc-g++,libncurses-devel,libprotobuf-devel,make,openssh,openssl-devel,perl,perl_pods,pkg-config,tmux,zlib-devel'
+    - '%CYG_ROOT%\bin\cygcheck -dc cygwin'
+
 branches:
     only:
     - master
@@ -16,8 +31,5 @@ before_build:
     mkdir build
     cd build
     cmake --version
-    set CC=cl.exe
-    set CXX=cl.exe
-    cmake -G "CodeBlocks - Unix Makefiles" ../llvm -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra"
-    make clang-format
+    %CYG_BASH% -lc "souurce ../build.sh"
      
