@@ -1,6 +1,6 @@
 # Experimental LLVM Compiler Infrastructure
 
-![AppVeyor Status](https://ci.appveyor.com/api/projects/status/github/mydeveloperday/llvm-project?branch=master&svg=true)
+[![AppVeyor Status](https://ci.appveyor.com/api/projects/status/github/mydeveloperday/llvm-project?branch=master&svg=true)](https://ci.appveyor.com/project/mydeveloperday/llvm-project)
 
 This fork of the LLVM project is to maintain experimental changes for clang-format and other tools.
 

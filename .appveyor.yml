@@ -11,7 +11,7 @@ cache:
   - '%CYG_CACHE%'
 
 install:
-    - '%CYG_ROOT%\setup-x86_64.exe --quiet-mode --no-shortcuts --upgrade-also --packages autoconf,autogen,automake,cygwin-devel,git,gcc-core,gcc-g++,libncurses-devel,libprotobuf-devel,make,openssh,openssl-devel,perl,perl_pods,pkg-config,tmux,zlib-devel'
+    - '%CYG_ROOT%\setup-x86_64.exe --quiet-mode --no-shortcuts --upgrade-also --packages autoconf,autogen,automake,cygwin-devel,git,gcc-core,gcc-g++,libncurses-devel,libprotobuf-devel,make,zip,openssh,openssl-devel,perl,perl_pods,pkg-config,tmux,zlib-devel'
     - '%CYG_ROOT%\bin\cygcheck -dc cygwin'
 
 branches:
@@ -55,6 +55,10 @@ before_test:
 
 test_script:
     echo "Test Script"
+    cd c:\projects
+    cd llvm-project
+    cd build
+    %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/tests.sh"
 
 after_test:
     echo "After Test"
