@@ -38,8 +38,14 @@ build_script:
     echo "Build Script"
 
 artifacts:
-    - path: build/RelWithDebInfo/*
-      name: ClangBinaries 
+    - path: build/RelWithDebInfo/bin/clang-format.exe
+      name: RelWithDebInfoClangFormat 
+
+    - path: build/Release/bin/clang-format.exe
+      name: ReleaseClangFormat
+
+    - path: build/Debug/bin/clang-format.exe
+      name: DebugClangFormat 
 
 after_build:
     echo "After Build"
