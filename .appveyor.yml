@@ -33,9 +33,6 @@ before_build:
     cd build
     cmake --version
     %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/build.sh"
-    cp ./bin/clang-format.exe ./bin/clang-format-experimental.exe
-    zip clang-format-experimental.zip ./bin/clang-format-experimental.exe
-    
 
 build_script:
     echo "Build Script"
