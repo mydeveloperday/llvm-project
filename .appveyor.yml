@@ -33,19 +33,22 @@ before_build:
     cd build
     cmake --version
     %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/build.sh"
+    cp ./bin/clang-format.exe ./bin/clang-format-experimental.exe
+    zip clang-format-experimental.zip ./bin/clang-format-experimental.exe
+    
 
 build_script:
     echo "Build Script"
 
 artifacts:
-    - path: build/RelWithDebInfo/bin/clang-format.exe
-      name: RelWithDebInfoClangFormat 
+    - path: build/bin/clang-format.exe
+      name: ClangFormat 
 
-    - path: build/Release/bin/clang-format.exe
-      name: ReleaseClangFormat
+    - path: build/bin/clang-format-experimental.exe
+      name: ExperimentalClangFormat 
 
-    - path: build/Debug/bin/clang-format.exe
-      name: DebugClangFormat 
+    - path: build/clang-format-experimental.zip
+      name: ExperimentalClangFormatZip
 
 after_build:
     echo "After Build"
