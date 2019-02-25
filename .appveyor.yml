@@ -38,7 +38,7 @@ build_script:
     echo "Build Script"
 
 artifacts:
-    - path: c:/projects/llvm-project/build/RelWithDebInfo/*
+    - path: build/RelWithDebInfo/*
       name: ClangBinaries 
 
 after_build:
