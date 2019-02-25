@@ -580,6 +580,43 @@ void WhitespaceManager::alignConsecutiveAssignments() {
   if (!Style.AlignConsecutiveAssignments)
     return;
 
+  AlignTokensAll(
+      Style,
+      [&](const Change &C) {
+        const FormatToken *Current = C.Tok;
+        unsigned SpacesRequiredBefore = 1;
+
+        if (Current->SpacesRequiredBefore == 0 || !Current->Previous)
+          return false;
+
+        Current = Current->Previous;
+
+        // If token is a ")", skip over the parameter list, to the
+        // token that precedes the "("
+        if (Current->is(tok::r_paren) && Current->MatchingParen) {
+          Current = Current->MatchingParen->Previous;
+          SpacesRequiredBefore = 0;
+        }
+
+        if (!Current || !Current->is(tok::identifier))
+          return false;
+
+        if (!Current->Previous || !Current->Previous->is(tok::pp_define))
+          return false;
+
+        // For a macro function, 0 spaces are required between the
+        // identifier and the lparen that opens the parameter list.
+        // For a simple macro, 1 space is required between the
+        // identifier and the first token of the defined value.
+        return Current->Next->SpacesRequiredBefore == SpacesRequiredBefore;
+      },
+      Changes);
+}
+
+void WhitespaceManager::alignConsecutiveAssignments() {
+  if (!Style.AlignConsecutiveAssignments)
+    return;
+
   AlignTokens(Style,
               [&](const Change &C) {
                 // Do not align on equal signs that are first on a line.
