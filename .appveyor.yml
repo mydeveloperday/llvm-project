@@ -27,11 +27,6 @@ platform:
 before_build:
 - cmd: |-
     call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
-    cd c:\projects
-    cd llvm-project
-    mkdir build
-    cd build
-    cmake --version
     %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/build.sh"
 
 build_script:
@@ -55,9 +50,6 @@ before_test:
 
 test_script:
     echo "Test Script"
-    cd c:\projects
-    cd llvm-project
-    cd build
     %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/tests.sh"
 
 after_test:

@@ -1,5 +1,6 @@
 echo `pwd`
 cd /cygdrive/c/projects/llvm-project/build
+echo `pwd`
 make FormatTests
 echo `pwd`
 /cygdrive/c/projects/llvm-project/build/tools/clang/unittests/Format/FormatTests.exe
