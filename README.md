@@ -4,7 +4,9 @@
 
 This fork of the LLVM project is to maintain experimental changes for clang-format (maybe and other tools in the future)
 
-As there is some delay (resistance) to land some revisions into clang-format upstream, this fork aims to promote those revisions into an experimental clang-format-experimental.exe binary, in order for their effectiveness to be evaluated without users having to work out how to merge a non committed change and go through the process of building clang-format.
+As there is often delay to land some revisions into clang-format upstream, this fork aims to promote those revisions by the production of a clang-format-experimental.exe binary.
+
+This will allow the effectiveness of unlanded revisions to be evaluated without users having to work out how to merge a non committed change and go through the process of building clang-format.
 
 This repo will contain current tip of master + revisions which appear to be wanted/desired by the wider community (revisions that have a large number of subscribers, Phabricator like tokens or are blocked from acceptance by lack of review or lack of consensous).
 
