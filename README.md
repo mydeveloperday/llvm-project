@@ -2,40 +2,36 @@
 
 [![AppVeyor Status](https://ci.appveyor.com/api/projects/status/github/mydeveloperday/llvm-project?branch=master&svg=true)](https://ci.appveyor.com/project/mydeveloperday/llvm-project)
 
-This fork of the LLVM project is to maintain experimental changes for clang-format and other tools.
+This fork of the LLVM project is to maintain experimental changes for clang-format (maybe and other tools in the future)
 
-There seems to be reluctance to accept some revisions into clang-format, citing that the clang-format 
-shouldn't support every formatting option or that some revisions impact development costs.
+As there is some delay (resistance) to land some revisions into clang-format upstream, this fork aims to promote those revisions into an experimental clang-format-experimental.exe binary, in order for their effectiveness to be evaluated without users having to work out how to merge a non committed change and go through the process of building clang-format.
 
-However there are revisions which seem desired by the wider community (large number of subscribers, Phabricator like tokens), however those revisions seem blocked. 
+This repo will contain current tip of master + revisions which appear to be wanted/desired by the wider community (revisions that have a large number of subscribers, Phabricator like tokens or are blocked from acceptance by lack of review or lack of consensous).
 
-It may be they are blocked for legitimate reasons, It seems however that there is often no real technical reason for blocking, except perhaps a view by some that clang-format is "done" or that we don't want to support too many options, because that makes it hard for people to discover which options to use.
+It may be revisions are blocked for legitimate reasons, But they may seem blocked for no real technical reason, except the view that either clang-format is "done" or that clang-format should not support too many options, or it that makes it hard for people to discover which options to use. But a search of github shows a worrying amount of usage of clang-format off/on in code which shows that using clang-format can be cumbersome if it doesn't quite match your style.  As a community I believe developers are often more than happy to search for and tweak a numerous set of options to get their code looking just right.
 
-However a search of github shows a worrying amount of usage of clang-format off/on in code which shows that using clang-format can be cumbersome if it doesn't quite match your style. 
+Code complexity aside, If all new options come with unit test  and those unit tests don't break or change existing tests then it 
+should be safe to land such changes safely.
 
-As a community I believe developers are more than happy to search for a tweak a numerous set of options to get their code looking just right.
+The purpose here is to give those unlanded revisions some velocity, pulling  those uncommitted revisions into a repo and using 
+CI system (appveyor) to build a clang format binary for the  wider community to use, This may aid to get some capability landed upstream.
 
-Code complexity aside, I see new options as giving power to people to choose. If all new options come with unit test 
-and those unit tests don't break or change existing tests then it should be safe to land such changes safely.
+Inclusion into this repository, requires the same revisions submitted to phabricator and
+those revisions have NOT yet been upstreamed. (we will get upstream revisions for free, as we sync with upstream master)
 
-My personal opinion is we should try and resolve those uses of clang-format on/off and where possible bring in 
-other options to give users the flexibility to configure how they want to and not be restricted by the "code owners" view.
+As the production of a release binary is based on committing to this repo, this may also help to reduce the time between new binaries being built on (https://llvm.org/builds/)
 
-The purpose here is to give those unlanded revisions some velocity, pulling 
-those uncommitted revisions into a repo and using CI system (appveyor) to build a clang format binary for the 
-wider community that supports them.
+Unlanded Revisions will me merged by pulling those revision down, and building a commit in this fork using the following.
 
-My hope would be that, usage and external pressure would then apply pressure for the capability to be landed upstream.
+arc export --revision D12345 --git > revD12345.patch
+patch -p1 < revD12345.patch
 
-Inclusion into this repository, requires revisions submitted to phabricator and
-those revisions have not been upstreamed. (we will get those for free, as we sync with master)
+Unlanded revisions need to remain rebased to the HEAD of master to avoid excessive merge conflicts, and updates should go via the original revision (until landed)
 
-I would like to follow the LLVM process of code review over in http://reviews.llvm.org. Ultimately I only want to land here what seems
-reasonable but is not being accepted for what seems like non obvious reasons, hopefully this will give people a path to a prebuilt binary (from tip of master) that they can use.
+I would like to follow the LLVM process of code review over in http://reviews.llvm.org.
 
 If you see a revision over in reviews.llvm.org that you think should be included because its useful then raise an 
 issue here citing the revision number D1234
-
 
 # Revisions Included
 
