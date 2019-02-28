@@ -40,3 +40,4 @@ issue here citing the revision number D1234
 The following is a list of revisions included in clang-format-experimental, for documentation you currently need to visit the revision in Phabricator
 
 * [D28462](https://reviews.llvm.org/D28462) - clang-format: Add new style option AlignConsecutiveMacros
+* [D52150](https://reviews.llvm.org/D52159) - [clang-format] BeforeHash added to IndentPPDirectives
