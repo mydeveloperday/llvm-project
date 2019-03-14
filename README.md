@@ -43,3 +43,4 @@ The following is a list of revisions included in clang-format-experimental, for 
 * [D52150](https://reviews.llvm.org/D52159) - [clang-format] BeforeHash added to IndentPPDirectives
 * [D59292](https://reviews.llvm.org/D59292) - [clang-format] messes up indentation when using JavaScript private fields and methods
 * [D59309](https://reviews.llvm.org/D59309) - [clang-format] BreakAfterReturnType ignored on functions with numeric template parameters
+* [D58404](https://reviews.llvm.org/D58404) - [clang-format] Add basic support for formatting C# files

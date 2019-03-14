@@ -152,7 +152,8 @@ this section should help get you past the largest hurdles of upgrading.
 AST Matchers
 ------------
 
-- ...
+- Add language support for clang-formatting C# files
+- Add Microsoft coding style to encapsulate default C# formatting style
 
 clang-format
 ------------

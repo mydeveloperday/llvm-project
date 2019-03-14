@@ -66,6 +66,21 @@ void FormatTokenLexer::tryMergePreviousTokens() {
     return;
   if (tryMergeLessLess())
     return;
+
+  if (Style.isCSharp()) {
+    if (tryMergeCSharpStringLiteral())
+      return;
+    if (tryMergeCSharpKeywordVariables())
+      return;
+    if (tryMergeCSharpDoubleQuestion())
+      return;
+    if (tryMergeCSharpNullConditionals())
+      return;
+    static const tok::TokenKind JSRightArrow[] = {tok::equal, tok::greater};
+    if (tryMergeTokens(JSRightArrow, TT_JsFatArrow))
+      return;
+  }
+
   if (tryMergeNSStringLiteral())
     return;
 
@@ -112,7 +127,8 @@ bool FormatTokenLexer::tryMergeNSStringLiteral() {
     return false;
   auto &At = *(Tokens.end() - 2);
   auto &String = *(Tokens.end() - 1);
-  if (!At->is(tok::at) || !String->is(tok::string_literal))
+  if (!At->is(tok::at) ||
+      !String->isOneOf(tok::string_literal, tok::verbatim_string_literal))
     return false;
   At->Tok.setKind(tok::string_literal);
   At->TokenText = StringRef(At->TokenText.begin(),
@@ -138,6 +154,99 @@ bool FormatTokenLexer::tryMergeJSPrivateIdentifier() {
                 Identifier->TokenText.end() - Hash->TokenText.begin());
   Hash->ColumnWidth += Identifier->ColumnWidth;
   Hash->Type = TT_JsPrivateIdentifier;
+  Tokens.erase(Tokens.end() - 1);
+  return true;
+}
+
+// Search for interpolated string literals $"aaaaa{abc}aaaaa" and mark token
+// as TT_CSharpStringLiteral, and to prevent splitting of $ and ".
+bool FormatTokenLexer::tryMergeCSharpStringLiteral() {
+  if (Tokens.size() < 2)
+    return false;
+  auto &At = *(Tokens.end() - 2);
+  auto &String = *(Tokens.end() - 1);
+
+  // Look for $"aaaaaa" @"aaaaaa".
+  if (!(At->is(tok::at) || At->TokenText == "$") ||
+      !String->isOneOf(tok::string_literal, tok::verbatim_string_literal))
+    return false;
+
+  // Look for $@"aaaaaa"
+  if (Tokens.size() >= 2 && At->is(tok::at)) {
+    auto &Dollar = *(Tokens.end() - 3);
+    if (Dollar->TokenText == "$") {
+      // this looks like $@"aaaaa" so we need to combine all 3
+      Dollar->Tok.setKind(tok::string_literal);
+      Dollar->TokenText =
+          StringRef(Dollar->TokenText.begin(),
+                    String->TokenText.end() - Dollar->TokenText.begin());
+      Dollar->ColumnWidth += (At->ColumnWidth + String->ColumnWidth);
+      Dollar->Type = TT_CSharpStringLiteral;
+      Tokens.erase(Tokens.end() - 2);
+      return true;
+    }
+  }
+
+  // Convert back into just a string_literal
+  At->Tok.setKind(tok::string_literal);
+  At->TokenText = StringRef(At->TokenText.begin(),
+                            String->TokenText.end() - At->TokenText.begin());
+  At->ColumnWidth += String->ColumnWidth;
+  At->Type = TT_CSharpStringLiteral;
+  Tokens.erase(Tokens.end() - 1);
+  return true;
+}
+
+bool FormatTokenLexer::tryMergeCSharpDoubleQuestion() {
+  if (Tokens.size() < 2)
+    return false;
+  auto &FirstQuestion = *(Tokens.end() - 2);
+  auto &SecondQuestion = *(Tokens.end() - 1);
+  if (!FirstQuestion->is(tok::question) || !SecondQuestion->is(tok::question))
+    return false;
+  FirstQuestion->Tok.setKind(tok::question);
+  FirstQuestion->TokenText = StringRef(FirstQuestion->TokenText.begin(),
+                                       SecondQuestion->TokenText.end() -
+                                           FirstQuestion->TokenText.begin());
+  FirstQuestion->ColumnWidth += SecondQuestion->ColumnWidth;
+  FirstQuestion->Type = TT_CSharpNullCoalescing;
+  Tokens.erase(Tokens.end() - 1);
+  return true;
+}
+
+bool FormatTokenLexer::tryMergeCSharpKeywordVariables() {
+  if (Tokens.size() < 2)
+    return false;
+  auto &At = *(Tokens.end() - 2);
+  auto &Keyword = *(Tokens.end() - 1);
+  if (!At->is(tok::at))
+    return false;
+  if (!Keywords.isCSharpKeyword(*Keyword))
+    return false;
+
+  At->Tok.setKind(tok::identifier);
+  At->TokenText = StringRef(At->TokenText.begin(),
+                            Keyword->TokenText.end() - At->TokenText.begin());
+  At->ColumnWidth += Keyword->ColumnWidth;
+  At->Type = Keyword->Type;
+  Tokens.erase(Tokens.end() - 1);
+  return true;
+}
+
+// in C# merge the Identifier and the ? together  arg?
+bool FormatTokenLexer::tryMergeCSharpNullConditionals() {
+  if (Tokens.size() < 2)
+    return false;
+  auto &Identifier = *(Tokens.end() - 2);
+  auto &Question = *(Tokens.end() - 1);
+  if (!Identifier->isOneOf(tok::r_square, tok::identifier) ||
+      !Question->is(tok::question))
+    return false;
+  Identifier->TokenText =
+      StringRef(Identifier->TokenText.begin(),
+                Question->TokenText.end() - Identifier->TokenText.begin());
+  Identifier->ColumnWidth += Question->ColumnWidth;
+  Identifier->Type = Identifier->Type;
   Tokens.erase(Tokens.end() - 1);
   return true;
 }

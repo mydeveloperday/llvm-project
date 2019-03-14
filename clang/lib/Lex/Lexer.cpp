@@ -1908,10 +1908,25 @@ bool Lexer::LexStringLiteral(Token &Result, const char *CurPtr,
            : diag::warn_c99_compat_unicode_literal);
 
   char C = getAndAdvanceChar(CurPtr, Result);
-  while (C != '"') {
+  while (true) {
+    // in a verbatium string you double quotes are doubly
+    // escaped, when you see a " check the next character
+    // and break the loop only if its not a another quote
+    if (C == '"' && Kind == tok::verbatim_string_literal) {
+      // peek the next character
+      unsigned Size = 0;
+      char NextChar = getCharAndSize(CurPtr, Size);
+      if (NextChar != '"') {
+        break;
+      }
+      // it was "" so consume the second quote
+      C = getAndAdvanceChar(CurPtr, Result);
+    } else if (C == '"') {
+      break;
+    }
     // Skip escaped characters.  Escaped newlines will already be processed by
     // getAndAdvanceChar.
-    if (C == '\\')
+    if (C == '\\' && Kind != tok::verbatim_string_literal)
       C = getAndAdvanceChar(CurPtr, Result);
 
     if (C == '\n' || C == '\r' ||             // Newline.
@@ -3841,9 +3856,16 @@ LexNextToken:
     }
     break;
 
-  case '@':
-    // Objective C support.
-    if (CurPtr[-1] == '@' && LangOpts.ObjC)
+  case '@': // Objective C support or verbatim string literal (C#)
+    // Notify MIOpt that we read a non-whitespace/non-comment token.
+    MIOpt.ReadToken();
+    Char = getCharAndSize(CurPtr, SizeTmp);
+
+    // verbatim string literal (C#) .
+    if (Char == '"' && LangOpts.CSharp)
+      return LexStringLiteral(Result, ConsumeChar(CurPtr, SizeTmp, Result),
+                              tok::verbatim_string_literal);
+    else if (CurPtr[-1] == '@' && LangOpts.ObjC)
       Kind = tok::at;
     else
       Kind = tok::unknown;

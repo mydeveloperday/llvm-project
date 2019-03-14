@@ -77,7 +77,7 @@ inline bool isAnyIdentifier(TokenKind K) {
 inline bool isStringLiteral(TokenKind K) {
   return K == tok::string_literal || K == tok::wide_string_literal ||
          K == tok::utf8_string_literal || K == tok::utf16_string_literal ||
-         K == tok::utf32_string_literal;
+         K == tok::utf32_string_literal || K == tok::verbatim_string_literal;
 }
 
 /// Return true if this is a "literal" kind, like a numeric
@@ -86,7 +86,8 @@ inline bool isLiteral(TokenKind K) {
   return K == tok::numeric_constant || K == tok::char_constant ||
          K == tok::wide_char_constant || K == tok::utf8_char_constant ||
          K == tok::utf16_char_constant || K == tok::utf32_char_constant ||
-         isStringLiteral(K) || K == tok::angle_string_literal;
+         isStringLiteral(K) || K == tok::angle_string_literal ||
+         K == tok::verbatim_string_literal;
 }
 
 /// Return true if this is any of tok::annot_* kinds.

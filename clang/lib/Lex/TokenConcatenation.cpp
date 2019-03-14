@@ -214,6 +214,7 @@ bool TokenConcatenation::AvoidConcat(const Token &PrevPrevTok,
     llvm_unreachable("tok::raw_identifier in non-raw lexing mode!");
 
   case tok::string_literal:
+  case tok::verbatim_string_literal:
   case tok::wide_string_literal:
   case tok::utf8_string_literal:
   case tok::utf16_string_literal:
@@ -242,10 +243,11 @@ bool TokenConcatenation::AvoidConcat(const Token &PrevPrevTok,
       return GetFirstChar(PP, Tok) != '.';
 
     if (Tok.getIdentifierInfo() ||
-        Tok.isOneOf(tok::wide_string_literal, tok::utf8_string_literal,
-                    tok::utf16_string_literal, tok::utf32_string_literal,
-                    tok::wide_char_constant, tok::utf8_char_constant,
-                    tok::utf16_char_constant, tok::utf32_char_constant))
+        Tok.isOneOf(tok::wide_string_literal, tok::verbatim_string_literal,
+                    tok::utf8_string_literal, tok::utf16_string_literal,
+                    tok::utf32_string_literal, tok::wide_char_constant,
+                    tok::utf8_char_constant, tok::utf16_char_constant,
+                    tok::utf32_char_constant))
       return true;
 
     // If this isn't identifier + string, we're done.

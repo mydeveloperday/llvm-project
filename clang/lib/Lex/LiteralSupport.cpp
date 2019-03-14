@@ -42,6 +42,7 @@ static unsigned getCharWidth(tok::TokenKind kind, const TargetInfo &Target) {
   case tok::string_literal:
   case tok::utf8_char_constant:
   case tok::utf8_string_literal:
+  case tok::verbatim_string_literal:
     return Target.getCharWidth();
   case tok::wide_char_constant:
   case tok::wide_string_literal:

@@ -221,6 +221,10 @@ PUNCTUATOR(coloncolon,          "::")
 // Objective C support.
 PUNCTUATOR(at,                  "@")
 
+// C# support
+PUNCTUATOR(dollar,              "$")
+TOK(verbatim_string_literal) // @"foo"
+
 // CUDA support.
 PUNCTUATOR(lesslessless,          "<<<")
 PUNCTUATOR(greatergreatergreater, ">>>")

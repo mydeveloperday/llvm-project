@@ -470,10 +470,11 @@ void html::SyntaxHighlight(Rewriter &R, FileID FID, const Preprocessor &PP) {
       --TokLen;
       // FALL THROUGH to chop the 8
       LLVM_FALLTHROUGH;
+    case tok::verbatim_string_literal:
     case tok::wide_string_literal:
     case tok::utf16_string_literal:
     case tok::utf32_string_literal:
-      // Chop off the L, u, U or 8 prefix
+      // Chop off the @ L, u, U or 8 prefix
       ++TokOffs;
       --TokLen;
       LLVM_FALLTHROUGH;
