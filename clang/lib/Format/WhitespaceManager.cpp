@@ -576,6 +576,7 @@ void WhitespaceManager::alignConsecutiveMacros() {
       Changes);
 }
 
+/*
 void WhitespaceManager::alignConsecutiveAssignments() {
   if (!Style.AlignConsecutiveAssignments)
     return;
@@ -612,6 +613,7 @@ void WhitespaceManager::alignConsecutiveAssignments() {
       },
       Changes);
 }
+*/
 
 void WhitespaceManager::alignConsecutiveAssignments() {
   if (!Style.AlignConsecutiveAssignments)
