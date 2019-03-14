@@ -26,8 +26,6 @@ platform:
 
 before_build:
     call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
-- cmd: |-
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
     %CYG_BASH% -lc "source /cygdrive/c/projects/llvm-project/build.sh"
     cp ./bin/clang-format.exe ./bin/clang-format-experimental.exe
     zip clang-format-experimental.zip ./bin/clang-format-experimental.exe
