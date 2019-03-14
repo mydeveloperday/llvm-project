@@ -2042,6 +2042,7 @@ static bool isFunctionDeclarationName(const FormatToken &Current,
   if (Next->MatchingParen->Next &&
       Next->MatchingParen->Next->is(TT_PointerOrReference))
     return true;
+  int TemplateOpenerLevel = 0;
   for (const FormatToken *Tok = Next->Next; Tok && Tok != Next->MatchingParen;
        Tok = Tok->Next) {
     if (Tok->is(tok::l_paren) && Tok->MatchingParen) {
@@ -2050,6 +2051,15 @@ static bool isFunctionDeclarationName(const FormatToken &Current,
     }
     if (Tok->is(tok::kw_const) || Tok->isSimpleTypeSpecifier() ||
         Tok->isOneOf(TT_PointerOrReference, TT_StartOfName, tok::ellipsis))
+      return true;
+    // Keep a track of how deep inside nested templates chevrons we are.
+    if (Tok->is(TT_TemplateOpener))
+      TemplateOpenerLevel++;
+    if (Tok->is(TT_TemplateCloser))
+      TemplateOpenerLevel--;
+    // We need to see a numeric_constant in a template argument e.g. <8>
+    // for it to be an argument that suggests a function decl.
+    if (Tok->is(tok::numeric_constant) && TemplateOpenerLevel > 0)
       return true;
     if (Tok->isOneOf(tok::l_brace, tok::string_literal, TT_ObjCMethodExpr) ||
         Tok->Tok.isLiteral())

@@ -158,7 +158,7 @@ clang-format
 ------------
 
 
-- ...
+- Add support for correct indenting of private fields and methods in Javascript.
 
 libclang
 --------
