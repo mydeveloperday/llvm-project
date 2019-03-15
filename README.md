@@ -46,4 +46,3 @@ The following is a list of revisions included in clang-format-experimental, for 
 * [D58404](https://reviews.llvm.org/D58404) - [clang-format] Add basic support for formatting C# files
 * [D54881](https://reviews.llvm.org/D54881) - [clang-format] Prevent Clang-Format from editing leading whitespace on lines outside of the format range
 * [D40988](https://reviews.llvm.org/D40988) - [clang-format] Add finer-grained options for putting all arguments on one line
-Clang-format: add finer-grained options for putting all arguments on one line
