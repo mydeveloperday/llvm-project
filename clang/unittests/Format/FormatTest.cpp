@@ -35,12 +35,12 @@ protected:
     SC_DoNotCheck
   };
 
-  std::string format(llvm::StringRef Code,
-                     const FormatStyle &Style = getLLVMStyle(),
-                     StatusCheck CheckComplete = SC_ExpectComplete) {
+  std::string formatRange(llvm::StringRef Code, tooling::Range Range,
+                          const FormatStyle &Style = getLLVMStyle(),
+                          StatusCheck CheckComplete = SC_ExpectComplete) {
     LLVM_DEBUG(llvm::errs() << "---\n");
     LLVM_DEBUG(llvm::errs() << Code << "\n\n");
-    std::vector<tooling::Range> Ranges(1, tooling::Range(0, Code.size()));
+    std::vector<tooling::Range> Ranges(1, std::move(Range));
     FormattingAttemptStatus Status;
     tooling::Replacements Replaces =
         reformat(Style, Code, Ranges, "<stdin>", &Status);
@@ -54,6 +54,13 @@ protected:
     EXPECT_TRUE(static_cast<bool>(Result));
     LLVM_DEBUG(llvm::errs() << "\n" << *Result << "\n\n");
     return *Result;
+  }
+
+  std::string format(llvm::StringRef Code,
+                     const FormatStyle &Style = getLLVMStyle(),
+                     StatusCheck CheckComplete = SC_ExpectComplete) {
+    return formatRange(Code, tooling::Range(0, Code.size()), Style,
+                       CheckComplete);
   }
 
   FormatStyle getStyleWithColumns(FormatStyle Style, unsigned ColumnLimit) {
@@ -107,6 +114,14 @@ protected:
   void verifyNoCrash(llvm::StringRef Code,
                      const FormatStyle &Style = getLLVMStyle()) {
     format(Code, Style, SC_DoNotCheck);
+  }
+
+  void verifyWithPrefixAndSuffix(llvm::StringRef Expected, llvm::StringRef Code,
+                                 llvm::StringRef prefix, llvm::StringRef suffix,
+                                 const FormatStyle &Style = getLLVMStyle()) {
+    EXPECT_EQ(llvm::Twine(prefix + Expected + suffix).str(),
+              formatRange(llvm::Twine(prefix + Code + suffix).str(),
+                          tooling::Range(prefix.size(), Code.size()), Style));
   }
 
   int ReplacementCount;
@@ -9303,6 +9318,18 @@ TEST_F(FormatTest, ConfigurableUseOfTab) {
                "\t}\n"
                "};",
                Tab);
+}
+
+TEST_F(FormatTest, FormattingIndentationDoesNotAffectOtherLines) {
+  FormatStyle Tab = getLLVMStyleWithColumns(42);
+  Tab.TabWidth = 4;
+  Tab.UseTab = FormatStyle::UT_Always;
+  verifyWithPrefixAndSuffix("\tfoobar();", "    foobar();",
+                            "int f() {\n    int a;\n", "\n    int b;\n}\n",
+                            Tab);
+  Tab.UseTab = FormatStyle::UT_Never;
+  verifyWithPrefixAndSuffix("    foobar();", "\tfoobar();",
+                            "int f() {\n\tint a;\n", "\n\tint b;\n}\n", Tab);
 }
 
 TEST_F(FormatTest, CalculatesOriginalColumn) {

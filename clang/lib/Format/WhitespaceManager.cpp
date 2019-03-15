@@ -45,13 +45,23 @@ WhitespaceManager::Change::Change(const FormatToken &Tok,
 void WhitespaceManager::replaceWhitespace(FormatToken &Tok, unsigned Newlines,
                                           unsigned Spaces,
                                           unsigned StartOfTokenColumn,
-                                          bool InPPDirective) {
+                                          bool InPPDirective,
+                                          bool OnlyUntilLastNewline) {
   if (Tok.Finalized)
     return;
   Tok.Decision = (Newlines > 0) ? FD_Break : FD_Continue;
-  Changes.push_back(Change(Tok, /*CreateReplacement=*/true, Tok.WhitespaceRange,
-                           Spaces, StartOfTokenColumn, Newlines, "", "",
-                           InPPDirective && !Tok.IsFirst,
+  SourceRange OriginalWhitespaceRange = Tok.WhitespaceRange;
+
+  if (OnlyUntilLastNewline) {
+    OriginalWhitespaceRange.setEnd(
+        OriginalWhitespaceRange.getBegin().getLocWithOffset(
+            Tok.LastNewlineOffset));
+    Spaces = 0;
+    StartOfTokenColumn = 0;
+  }
+  Changes.push_back(Change(Tok, /*CreateReplacement=*/true,
+                           OriginalWhitespaceRange, Spaces, StartOfTokenColumn,
+                           Newlines, "", "", InPPDirective && !Tok.IsFirst,
                            /*IsInsideToken=*/false));
 }
 

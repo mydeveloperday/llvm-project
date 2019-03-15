@@ -1107,9 +1107,9 @@ unsigned UnwrappedLineFormatter::format(
                               TheLine.LeadingEmptyLinesAffected);
         // Format the first token.
         if (ReformatLeadingWhitespace)
-          formatFirstToken(TheLine, PreviousLine, Lines,
-                           TheLine.First->OriginalColumn,
-                           TheLine.First->OriginalColumn);
+          formatFirstToken(
+              TheLine, PreviousLine, Lines, TheLine.First->OriginalColumn,
+              TheLine.First->OriginalColumn, /*OnlyUntilLastNewline=*/true);
         else
           Whitespaces->addUntouchableToken(*TheLine.First,
                                            TheLine.InPPDirective);
@@ -1132,7 +1132,7 @@ unsigned UnwrappedLineFormatter::format(
 void UnwrappedLineFormatter::formatFirstToken(
     const AnnotatedLine &Line, const AnnotatedLine *PreviousLine,
     const SmallVectorImpl<AnnotatedLine *> &Lines, unsigned Indent,
-    unsigned NewlineIndent) {
+    unsigned NewlineIndent, bool OnlyUntilLastNewline) {
   FormatToken &RootToken = *Line.First;
   if (RootToken.is(tok::eof)) {
     unsigned Newlines = std::min(RootToken.NewlinesBefore, 1u);
@@ -1186,7 +1186,8 @@ void UnwrappedLineFormatter::formatFirstToken(
 
   Whitespaces->replaceWhitespace(RootToken, Newlines, Indent, Indent,
                                  Line.InPPDirective &&
-                                     !RootToken.HasUnescapedNewline);
+                                     !RootToken.HasUnescapedNewline,
+                                 OnlyUntilLastNewline);
 }
 
 unsigned

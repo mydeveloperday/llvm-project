@@ -50,7 +50,8 @@ private:
   void formatFirstToken(const AnnotatedLine &Line,
                         const AnnotatedLine *PreviousLine,
                         const SmallVectorImpl<AnnotatedLine *> &Lines,
-                        unsigned Indent, unsigned NewlineIndent);
+                        unsigned Indent, unsigned NewlineIndent,
+                        bool OnlyUntilLastNewline = false);
 
   /// Returns the column limit for a line, taking into account whether we
   /// need an escaped newline due to a continued preprocessor directive.

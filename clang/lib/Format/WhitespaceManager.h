@@ -48,7 +48,8 @@ public:
   /// into tabs and spaces for some format styles.
   void replaceWhitespace(FormatToken &Tok, unsigned Newlines, unsigned Spaces,
                          unsigned StartOfTokenColumn,
-                         bool InPPDirective = false);
+                         bool InPPDirective = false,
+                         bool OnlyUntilLastNewline = false);
 
   /// Adds information about an unchangeable token's whitespace.
   ///
