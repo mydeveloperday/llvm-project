@@ -39,9 +39,11 @@ issue here citing the revision number D1234
 
 The following is a list of revisions included in clang-format-experimental, for documentation you currently need to visit the revision in Phabricator
 
-* [D28462](https://reviews.llvm.org/D28462) - clang-format: Add new style option AlignConsecutiveMacros
+* [D28462](https://reviews.llvm.org/D28462) - [clang-format] Add new style option AlignConsecutiveMacros
 * [D52150](https://reviews.llvm.org/D52159) - [clang-format] BeforeHash added to IndentPPDirectives
 * [D59292](https://reviews.llvm.org/D59292) - [clang-format] messes up indentation when using JavaScript private fields and methods
 * [D59309](https://reviews.llvm.org/D59309) - [clang-format] BreakAfterReturnType ignored on functions with numeric template parameters
 * [D58404](https://reviews.llvm.org/D58404) - [clang-format] Add basic support for formatting C# files
 * [D54881](https://reviews.llvm.org/D54881) - [clang-format] Prevent Clang-Format from editing leading whitespace on lines outside of the format range
+* [D40988](https://reviews.llvm.org/D40988) - [clang-format] Add finer-grained options for putting all arguments on one line
+Clang-format: add finer-grained options for putting all arguments on one line
