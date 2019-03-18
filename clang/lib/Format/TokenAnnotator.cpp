@@ -2459,6 +2459,12 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   return 3;
 }
 
+bool TokenAnnotator::spaceRequiredBeforeParens(const FormatToken &Right) const {
+  return Style.SpaceBeforeParens == FormatStyle::SBPO_Always ||
+         (Style.SpaceBeforeParens == FormatStyle::SBPO_NonEmptyParentheses &&
+          Right.ParameterCount > 0);
+}
+
 bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
                                           const FormatToken &Left,
                                           const FormatToken &Right) {
@@ -2598,19 +2604,19 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
       return true;
     return Line.Type == LT_ObjCDecl || Left.is(tok::semi) ||
            (Style.SpaceBeforeParens != FormatStyle::SBPO_Never &&
-            (Left.isOneOf(tok::kw_if, tok::pp_elif, tok::kw_for, tok::kw_while,
-                          tok::kw_switch, tok::kw_case, TT_ForEachMacro,
-                          TT_ObjCForIn) ||
-             Left.endsSequence(tok::kw_constexpr, tok::kw_if) ||
-             (Left.isOneOf(tok::kw_try, Keywords.kw___except, tok::kw_catch,
-                           tok::kw_new, tok::kw_delete) &&
-              (!Left.Previous || Left.Previous->isNot(tok::period))))) ||
-           (Style.SpaceBeforeParens == FormatStyle::SBPO_Always &&
-            (Left.is(tok::identifier) || Left.isFunctionLikeKeyword() ||
-             Left.is(tok::r_paren) ||
-             (Left.is(tok::r_square) && Left.MatchingParen &&
-              Left.MatchingParen->is(TT_LambdaLSquare))) &&
-            Line.Type != LT_PreprocessorDirective);
+            ((Left.isOneOf(tok::kw_if, tok::pp_elif, tok::kw_for, tok::kw_while,
+                           tok::kw_switch, tok::kw_case, TT_ForEachMacro,
+                           TT_ObjCForIn) ||
+              Left.endsSequence(tok::kw_constexpr, tok::kw_if) ||
+              (Left.isOneOf(tok::kw_try, Keywords.kw___except, tok::kw_catch,
+                            tok::kw_new, tok::kw_delete) &&
+               (!Left.Previous || Left.Previous->isNot(tok::period)))) ||
+             (spaceRequiredBeforeParens(Right) &&
+              ((Left.is(tok::identifier) || Left.isFunctionLikeKeyword() ||
+                Left.is(tok::r_paren) || Left.isSimpleTypeSpecifier() ||
+                (Left.is(tok::r_square) && Left.MatchingParen &&
+                 Left.MatchingParen->is(TT_LambdaLSquare))) &&
+               Line.Type != LT_PreprocessorDirective))));
   }
   if (Left.is(tok::at) && Right.Tok.getObjCKeywordID() != tok::objc_not_keyword)
     return false;
@@ -2800,7 +2806,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
       Left.isOneOf(TT_TrailingReturnArrow, TT_LambdaArrow))
     return true;
   if (Right.is(TT_OverloadedOperatorLParen))
-    return Style.SpaceBeforeParens == FormatStyle::SBPO_Always;
+    return spaceRequiredBeforeParens(Right);
   if (Left.is(tok::comma))
     return true;
   if (Right.is(tok::comma))
@@ -2884,7 +2890,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return true;
   if (Left.is(TT_TemplateCloser) && Right.is(tok::l_paren) &&
       Right.isNot(TT_FunctionTypeLParen))
-    return Style.SpaceBeforeParens == FormatStyle::SBPO_Always;
+    return spaceRequiredBeforeParens(Right);
   if (Right.is(TT_TemplateOpener) && Left.is(tok::r_paren) &&
       Left.MatchingParen && Left.MatchingParen->is(TT_OverloadedOperatorLParen))
     return false;
