@@ -1,6 +1,4 @@
-LEVEL = ../../../make
 CXX_SOURCES := main.cpp
+CFLAGS_EXTRAS = $(MANDATORY_MODULE_BUILD_CFLAGS) -I$(BUILDDIR)/include
 
-CFLAGS += $(MANDATORY_MODULE_BUILD_CFLAGS)
-
-include $(LEVEL)/Makefile.rules
+include Makefile.rules

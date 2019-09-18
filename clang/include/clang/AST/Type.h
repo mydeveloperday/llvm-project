@@ -317,6 +317,11 @@ public:
     qs.removeObjCLifetime();
     return qs;
   }
+  Qualifiers withoutAddressSpace() const {
+    Qualifiers qs = *this;
+    qs.removeAddressSpace();
+    return qs;
+  }
 
   bool hasObjCLifetime() const { return Mask & LifetimeMask; }
   ObjCLifetime getObjCLifetime() const {
@@ -455,21 +460,25 @@ public:
     Mask |= qs.Mask;
   }
 
-  /// Returns true if this address space is a superset of the other one.
+  /// Returns true if address space A is equal to or a superset of B.
   /// OpenCL v2.0 defines conversion rules (OpenCLC v2.0 s6.5.5) and notion of
   /// overlapping address spaces.
   /// CL1.1 or CL1.2:
   ///   every address space is a superset of itself.
   /// CL2.0 adds:
   ///   __generic is a superset of any address space except for __constant.
+  static bool isAddressSpaceSupersetOf(LangAS A, LangAS B) {
+    // Address spaces must match exactly.
+    return A == B ||
+           // Otherwise in OpenCLC v2.0 s6.5.5: every address space except
+           // for __constant can be used as __generic.
+           (A == LangAS::opencl_generic && B != LangAS::opencl_constant);
+  }
+
+  /// Returns true if the address space in these qualifiers is equal to or
+  /// a superset of the address space in the argument qualifiers.
   bool isAddressSpaceSupersetOf(Qualifiers other) const {
-    return
-        // Address spaces must match exactly.
-        getAddressSpace() == other.getAddressSpace() ||
-        // Otherwise in OpenCLC v2.0 s6.5.5: every address space except
-        // for __constant can be used as __generic.
-        (getAddressSpace() == LangAS::opencl_generic &&
-         other.getAddressSpace() != LangAS::opencl_constant);
+    return isAddressSpaceSupersetOf(getAddressSpace(), other.getAddressSpace());
   }
 
   /// Determines if these qualifiers compatibly include another set.
@@ -963,6 +972,9 @@ public:
   friend bool operator!=(const QualType &LHS, const QualType &RHS) {
     return LHS.Value != RHS.Value;
   }
+  friend bool operator<(const QualType &LHS, const QualType &RHS) {
+    return LHS.Value < RHS.Value;
+  }
 
   static std::string getAsString(SplitQualType split,
                                  const PrintingPolicy &Policy) {
@@ -1121,12 +1133,6 @@ public:
   };
 
   /// Check if this is a non-trivial type that would cause a C struct
-  /// transitively containing this type to be non-trivial. This function can be
-  /// used to determine whether a field of this type can be declared inside a C
-  /// union.
-  bool isNonTrivialPrimitiveCType(const ASTContext &Ctx) const;
-
-  /// Check if this is a non-trivial type that would cause a C struct
   /// transitively containing this type to be non-trivial to copy and return the
   /// kind.
   PrimitiveCopyKind isNonTrivialToPrimitiveCopy() const;
@@ -1154,6 +1160,22 @@ public:
   DestructionKind isDestructedType() const {
     return isDestructedTypeImpl(*this);
   }
+
+  /// Check if this is or contains a C union that is non-trivial to
+  /// default-initialize, which is a union that has a member that is non-trivial
+  /// to default-initialize. If this returns true,
+  /// isNonTrivialToPrimitiveDefaultInitialize returns PDIK_Struct.
+  bool hasNonTrivialToPrimitiveDefaultInitializeCUnion() const;
+
+  /// Check if this is or contains a C union that is non-trivial to destruct,
+  /// which is a union that has a member that is non-trivial to destruct. If
+  /// this returns true, isDestructedType returns DK_nontrivial_c_struct.
+  bool hasNonTrivialToPrimitiveDestructCUnion() const;
+
+  /// Check if this is or contains a C union that is non-trivial to copy, which
+  /// is a union that has a member that is non-trivial to copy. If this returns
+  /// true, isNonTrivialToPrimitiveCopy returns PCK_Struct.
+  bool hasNonTrivialToPrimitiveCopyCUnion() const;
 
   /// Determine whether expressions of the given type are forbidden
   /// from being lvalues in C.
@@ -1227,6 +1249,11 @@ private:
                                                  const ASTContext &C);
   static QualType IgnoreParens(QualType T);
   static DestructionKind isDestructedTypeImpl(QualType type);
+
+  /// Check if \param RD is or contains a non-trivial C union.
+  static bool hasNonTrivialToPrimitiveDefaultInitializeCUnion(const RecordDecl *RD);
+  static bool hasNonTrivialToPrimitiveDestructCUnion(const RecordDecl *RD);
+  static bool hasNonTrivialToPrimitiveCopyCUnion(const RecordDecl *RD);
 };
 
 } // namespace clang
@@ -1406,7 +1433,7 @@ enum class AutoTypeKeyword {
 ///
 /// Types, once created, are immutable.
 ///
-class Type : public ExtQualsTypeCommonBase {
+class alignas(8) Type : public ExtQualsTypeCommonBase {
 public:
   enum TypeClass {
 #define TYPE(Class, Base) Class,
@@ -1808,7 +1835,9 @@ public:
   friend class ASTWriter;
 
   Type(const Type &) = delete;
+  Type(Type &&) = delete;
   Type &operator=(const Type &) = delete;
+  Type &operator=(Type &&) = delete;
 
   TypeClass getTypeClass() const { return static_cast<TypeClass>(TypeBits.TC); }
 
@@ -1955,6 +1984,7 @@ public:
   bool isLValueReferenceType() const;
   bool isRValueReferenceType() const;
   bool isFunctionPointerType() const;
+  bool isFunctionReferenceType() const;
   bool isMemberPointerType() const;
   bool isMemberFunctionPointerType() const;
   bool isMemberDataPointerType() const;
@@ -2402,6 +2432,9 @@ public:
 // OpenCL extension types
 #define EXT_OPAQUE_TYPE(ExtType, Id, Ext) Id,
 #include "clang/Basic/OpenCLExtensionTypes.def"
+// SVE Types
+#define SVE_TYPE(Name, Id, SingletonId) Id,
+#include "clang/Basic/AArch64SVEACLETypes.def"
 // All other builtin types
 #define BUILTIN_TYPE(Id, SingletonId) Id,
 #define LAST_BUILTIN_TYPE(Id) LastKind = Id
@@ -3848,6 +3881,7 @@ private:
     case EST_MSAny:
     case EST_BasicNoexcept:
     case EST_Unparsed:
+    case EST_NoThrow:
       return {0, 0, 0};
 
     case EST_Dynamic:
@@ -4175,6 +4209,41 @@ public:
   QualType desugar() const;
 
   static bool classof(const Type *T) { return T->getTypeClass() == Typedef; }
+};
+
+/// Sugar type that represents a type that was qualified by a qualifier written
+/// as a macro invocation.
+class MacroQualifiedType : public Type {
+  friend class ASTContext; // ASTContext creates these.
+
+  QualType UnderlyingTy;
+  const IdentifierInfo *MacroII;
+
+  MacroQualifiedType(QualType UnderlyingTy, QualType CanonTy,
+                     const IdentifierInfo *MacroII)
+      : Type(MacroQualified, CanonTy, UnderlyingTy->isDependentType(),
+             UnderlyingTy->isInstantiationDependentType(),
+             UnderlyingTy->isVariablyModifiedType(),
+             UnderlyingTy->containsUnexpandedParameterPack()),
+        UnderlyingTy(UnderlyingTy), MacroII(MacroII) {
+    assert(isa<AttributedType>(UnderlyingTy) &&
+           "Expected a macro qualified type to only wrap attributed types.");
+  }
+
+public:
+  const IdentifierInfo *getMacroIdentifier() const { return MacroII; }
+  QualType getUnderlyingType() const { return UnderlyingTy; }
+
+  /// Return this attributed type's modified type with no qualifiers attached to
+  /// it.
+  QualType getModifiedType() const;
+
+  bool isSugared() const { return true; }
+  QualType desugar() const;
+
+  static bool classof(const Type *T) {
+    return T->getTypeClass() == MacroQualified;
+  }
 };
 
 /// Represents a `typeof` (or __typeof__) expression (a GCC extension).
@@ -4755,9 +4824,9 @@ class AutoType : public DeducedType, public llvm::FoldingSetNode {
   friend class ASTContext; // ASTContext creates these
 
   AutoType(QualType DeducedAsType, AutoTypeKeyword Keyword,
-           bool IsDeducedAsDependent)
+           bool IsDeducedAsDependent, bool IsDeducedAsPack)
       : DeducedType(Auto, DeducedAsType, IsDeducedAsDependent,
-                    IsDeducedAsDependent, /*ContainsPack=*/false) {
+                    IsDeducedAsDependent, IsDeducedAsPack) {
     AutoTypeBits.Keyword = (unsigned)Keyword;
   }
 
@@ -4771,14 +4840,16 @@ public:
   }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, getDeducedType(), getKeyword(), isDependentType());
+    Profile(ID, getDeducedType(), getKeyword(), isDependentType(),
+            containsUnexpandedParameterPack());
   }
 
   static void Profile(llvm::FoldingSetNodeID &ID, QualType Deduced,
-                      AutoTypeKeyword Keyword, bool IsDependent) {
+                      AutoTypeKeyword Keyword, bool IsDependent, bool IsPack) {
     ID.AddPointer(Deduced.getAsOpaquePtr());
     ID.AddInteger((unsigned)Keyword);
     ID.AddBoolean(IsDependent);
+    ID.AddBoolean(IsPack);
   }
 
   static bool classof(const Type *T) {
@@ -6199,6 +6270,24 @@ inline Qualifiers::GC QualType::getObjCGCAttr() const {
   return getQualifiers().getObjCGCAttr();
 }
 
+inline bool QualType::hasNonTrivialToPrimitiveDefaultInitializeCUnion() const {
+  if (auto *RD = getTypePtr()->getBaseElementTypeUnsafe()->getAsRecordDecl())
+    return hasNonTrivialToPrimitiveDefaultInitializeCUnion(RD);
+  return false;
+}
+
+inline bool QualType::hasNonTrivialToPrimitiveDestructCUnion() const {
+  if (auto *RD = getTypePtr()->getBaseElementTypeUnsafe()->getAsRecordDecl())
+    return hasNonTrivialToPrimitiveDestructCUnion(RD);
+  return false;
+}
+
+inline bool QualType::hasNonTrivialToPrimitiveCopyCUnion() const {
+  if (auto *RD = getTypePtr()->getBaseElementTypeUnsafe()->getAsRecordDecl())
+    return hasNonTrivialToPrimitiveCopyCUnion(RD);
+  return false;
+}
+
 inline FunctionType::ExtInfo getFunctionExtInfo(const Type &t) {
   if (const auto *PT = t.getAs<PointerType>()) {
     if (const auto *FT = PT->getPointeeType()->getAs<FunctionType>())
@@ -6324,6 +6413,13 @@ inline bool Type::isRValueReferenceType() const {
 
 inline bool Type::isFunctionPointerType() const {
   if (const auto *T = getAs<PointerType>())
+    return T->getPointeeType()->isFunctionType();
+  else
+    return false;
+}
+
+inline bool Type::isFunctionReferenceType() const {
+  if (const auto *T = getAs<ReferenceType>())
     return T->getPointeeType()->isFunctionType();
   else
     return false;
@@ -6798,6 +6894,8 @@ template <typename T> const T *Type::getAsAdjusted() const {
       Ty = P->desugar().getTypePtr();
     else if (const auto *A = dyn_cast<AdjustedType>(Ty))
       Ty = A->desugar().getTypePtr();
+    else if (const auto *M = dyn_cast<MacroQualifiedType>(Ty))
+      Ty = M->desugar().getTypePtr();
     else
       break;
   }

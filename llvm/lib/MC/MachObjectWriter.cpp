@@ -13,6 +13,7 @@
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCFixupKindInfo.h"
@@ -24,6 +25,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolMachO.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -125,7 +127,7 @@ uint64_t MachObjectWriter::getPaddingSize(const MCSection *Sec,
   const MCSection &NextSec = *Layout.getSectionOrder()[Next];
   if (NextSec.isVirtualSection())
     return 0;
-  return OffsetToAlignment(EndAddr, NextSec.getAlignment());
+  return offsetToAlignment(EndAddr, llvm::Align(NextSec.getAlignment()));
 }
 
 void MachObjectWriter::writeHeader(MachO::HeaderFileType Type,
@@ -443,9 +445,18 @@ void MachObjectWriter::writeLinkerOptionsLoadCommand(
   }
 
   // Pad to a multiple of the pointer size.
-  W.OS.write_zeros(OffsetToAlignment(BytesWritten, is64Bit() ? 8 : 4));
+  W.OS.write_zeros(offsetToAlignment(BytesWritten, is64Bit() ? llvm::Align(8)
+                                                             : llvm::Align(4)));
 
   assert(W.OS.tell() - Start == Size);
+}
+
+static bool isFixupTargetValid(const MCValue &Target) {
+  // Target is (LHS - RHS + cst).
+  // We don't support the form where LHS is null: -RHS + cst
+  if (!Target.getSymA() && Target.getSymB())
+    return false;
+  return true;
 }
 
 void MachObjectWriter::recordRelocation(MCAssembler &Asm,
@@ -453,6 +464,12 @@ void MachObjectWriter::recordRelocation(MCAssembler &Asm,
                                         const MCFragment *Fragment,
                                         const MCFixup &Fixup, MCValue Target,
                                         uint64_t &FixedValue) {
+  if (!isFixupTargetValid(Target)) {
+    Asm.getContext().reportError(Fixup.getLoc(),
+                                 "unsupported relocation expression");
+    return;
+  }
+
   TargetObjectWriter->recordRelocation(this, Asm, Layout, Fragment, Fixup,
                                        Target, FixedValue);
 }
@@ -817,7 +834,8 @@ uint64_t MachObjectWriter::writeObject(MCAssembler &Asm,
   // The section data is padded to 4 bytes.
   //
   // FIXME: Is this machine dependent?
-  unsigned SectionDataPadding = OffsetToAlignment(SectionDataFileSize, 4);
+  unsigned SectionDataPadding =
+      offsetToAlignment(SectionDataFileSize, llvm::Align(4));
   SectionDataFileSize += SectionDataPadding;
 
   // Write the prolog, starting with the header and load command...
@@ -982,7 +1000,8 @@ uint64_t MachObjectWriter::writeObject(MCAssembler &Asm,
 #endif
     Asm.getLOHContainer().emit(*this, Layout);
     // Pad to a multiple of the pointer size.
-    W.OS.write_zeros(OffsetToAlignment(LOHRawSize, is64Bit() ? 8 : 4));
+    W.OS.write_zeros(offsetToAlignment(LOHRawSize, is64Bit() ? llvm::Align(8)
+                                                             : llvm::Align(4)));
     assert(W.OS.tell() - Start == LOHSize);
   }
 
@@ -1028,6 +1047,6 @@ uint64_t MachObjectWriter::writeObject(MCAssembler &Asm,
 std::unique_ptr<MCObjectWriter>
 llvm::createMachObjectWriter(std::unique_ptr<MCMachObjectTargetWriter> MOTW,
                              raw_pwrite_stream &OS, bool IsLittleEndian) {
-  return llvm::make_unique<MachObjectWriter>(std::move(MOTW), OS,
+  return std::make_unique<MachObjectWriter>(std::move(MOTW), OS,
                                              IsLittleEndian);
 }

@@ -601,6 +601,14 @@ EmitMatcher(const Matcher *N, unsigned Indent, unsigned CurrentIdx,
     OS << "OPC_CheckFoldableChainNode,\n";
     return 1;
 
+  case Matcher::CheckImmAllOnesV:
+    OS << "OPC_CheckImmAllOnesV,\n";
+    return 1;
+
+  case Matcher::CheckImmAllZerosV:
+    OS << "OPC_CheckImmAllZerosV,\n";
+    return 1;
+
   case Matcher::EmitInteger: {
     int64_t Val = cast<EmitIntegerMatcher>(N)->getValue();
     OS << "OPC_EmitInteger, "
@@ -662,12 +670,22 @@ EmitMatcher(const Matcher *N, unsigned Indent, unsigned CurrentIdx,
     OS << '\n';
     return 2+MN->getNumNodes();
   }
-  case Matcher::EmitCopyToReg:
-    OS << "OPC_EmitCopyToReg, "
-       << cast<EmitCopyToRegMatcher>(N)->getSrcSlot() << ", "
-       << getQualifiedName(cast<EmitCopyToRegMatcher>(N)->getDestPhysReg())
-       << ",\n";
-    return 3;
+  case Matcher::EmitCopyToReg: {
+    const auto *C2RMatcher = cast<EmitCopyToRegMatcher>(N);
+    int Bytes = 3;
+    const CodeGenRegister *Reg = C2RMatcher->getDestPhysReg();
+    if (Reg->EnumValue > 255) {
+      assert(isUInt<16>(Reg->EnumValue) && "not handled");
+      OS << "OPC_EmitCopyToReg2, " << C2RMatcher->getSrcSlot() << ", "
+         << "TARGET_VAL(" << getQualifiedName(Reg->TheDef) << "),\n";
+      ++Bytes;
+    } else {
+      OS << "OPC_EmitCopyToReg, " << C2RMatcher->getSrcSlot() << ", "
+         << getQualifiedName(Reg->TheDef) << ",\n";
+    }
+
+    return Bytes;
+  }
   case Matcher::EmitNodeXForm: {
     const EmitNodeXFormMatcher *XF = cast<EmitNodeXFormMatcher>(N);
     OS << "OPC_EmitNodeXForm, " << getNodeXFormID(XF->getNodeXForm()) << ", "
@@ -1007,6 +1025,8 @@ static StringRef getOpcodeString(Matcher::KindTy Kind) {
   case Matcher::CheckOrImm: return "OPC_CheckOrImm"; break;
   case Matcher::CheckFoldableChainNode:
     return "OPC_CheckFoldableChainNode"; break;
+  case Matcher::CheckImmAllOnesV: return "OPC_CheckImmAllOnesV"; break;
+  case Matcher::CheckImmAllZerosV: return "OPC_CheckImmAllZerosV"; break;
   case Matcher::EmitInteger: return "OPC_EmitInteger"; break;
   case Matcher::EmitStringInteger: return "OPC_EmitStringInteger"; break;
   case Matcher::EmitRegister: return "OPC_EmitRegister"; break;

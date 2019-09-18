@@ -60,7 +60,7 @@ private:
   SDValue lowerImage(SDValue Op, const AMDGPU::ImageDimIntrinsicInfo *Intr,
                      SelectionDAG &DAG) const;
   SDValue lowerSBuffer(EVT VT, SDLoc DL, SDValue Rsrc, SDValue Offset,
-                       SDValue GLC, SelectionDAG &DAG) const;
+                       SDValue GLC, SDValue DLC, SelectionDAG &DAG) const;
 
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
@@ -89,10 +89,19 @@ private:
   SDValue LowerTrig(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerATOMIC_CMP_SWAP(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBRCOND(SDValue Op, SelectionDAG &DAG) const;
-
+  SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue adjustLoadValueType(unsigned Opcode, MemSDNode *M,
                               SelectionDAG &DAG, ArrayRef<SDValue> Ops,
                               bool IsIntrinsic = false) const;
+
+  SDValue lowerIntrinsicLoad(MemSDNode *M, bool IsFormat, SelectionDAG &DAG,
+                             ArrayRef<SDValue> Ops) const;
+
+  // Call DAG.getMemIntrinsicNode for a load, but first widen a dwordx3 type to
+  // dwordx4 if on SI.
+  SDValue getMemIntrinsicNode(unsigned Opcode, const SDLoc &DL, SDVTList VTList,
+                              ArrayRef<SDValue> Ops, EVT MemVT,
+                              MachineMemOperand *MMO, SelectionDAG &DAG) const;
 
   SDValue handleD16VData(SDValue VData, SelectionDAG &DAG) const;
 
@@ -115,8 +124,10 @@ private:
                              SelectionDAG &DAG) const;
 
   SDValue lowerADDRSPACECAST(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerINSERT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerTRAP(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerDEBUGTRAP(SDValue Op, SelectionDAG &DAG) const;
@@ -140,6 +151,7 @@ private:
   SDValue performOrCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performXorCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performZeroExtendCombine(SDNode *N, DAGCombinerInfo &DCI) const;
+  SDValue performSignExtendInRegCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performClassCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue getCanonicalConstantFP(SelectionDAG &DAG, const SDLoc &SL, EVT VT,
                                  const APFloat &C) const;
@@ -192,6 +204,15 @@ private:
   void setBufferOffsets(SDValue CombinedOffset, SelectionDAG &DAG,
                         SDValue *Offsets, unsigned Align = 4) const;
 
+  // Handle 8 bit and 16 bit buffer loads
+  SDValue handleByteShortBufferLoads(SelectionDAG &DAG, EVT LoadVT, SDLoc DL,
+                                     ArrayRef<SDValue> Ops, MemSDNode *M) const;
+
+  // Handle 8 bit and 16 bit buffer stores
+  SDValue handleByteShortBufferStores(SelectionDAG &DAG, EVT VDataType,
+                                      SDLoc DL, SDValue Ops[],
+                                      MemSDNode *M) const;
+
 public:
   SITargetLowering(const TargetMachine &tm, const GCNSubtarget &STI);
 
@@ -217,20 +238,26 @@ public:
   bool canMergeStoresTo(unsigned AS, EVT MemVT,
                         const SelectionDAG &DAG) const override;
 
-  bool allowsMisalignedMemoryAccesses(EVT VT, unsigned AS,
-                                      unsigned Align,
-                                      bool *IsFast) const override;
+  bool allowsMisalignedMemoryAccessesImpl(
+      unsigned Size, unsigned AS, unsigned Align,
+      MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
+      bool *IsFast = nullptr) const;
+
+  bool allowsMisalignedMemoryAccesses(
+      EVT VT, unsigned AS, unsigned Align,
+      MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
+      bool *IsFast = nullptr) const override;
 
   EVT getOptimalMemOpType(uint64_t Size, unsigned DstAlign,
                           unsigned SrcAlign, bool IsMemset,
                           bool ZeroMemset,
                           bool MemcpyStrSrc,
-                          MachineFunction &MF) const override;
+                          const AttributeList &FuncAttributes) const override;
 
   bool isMemOpUniform(const SDNode *N) const;
   bool isMemOpHasNoClobberedMemOperand(const SDNode *N) const;
   bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
-  bool isCheapAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
+  bool isFreeAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
 
   TargetLoweringBase::LegalizeTypeAction
   getPreferredVectorAction(MVT VT) const override;
@@ -296,6 +323,10 @@ public:
   MachineBasicBlock *splitKillBlock(MachineInstr &MI,
                                     MachineBasicBlock *BB) const;
 
+  void bundleInstWithWaitcnt(MachineInstr &MI) const;
+  MachineBasicBlock *emitGWSMemViolTestLoop(MachineInstr &MI,
+                                            MachineBasicBlock *BB) const;
+
   MachineBasicBlock *
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
@@ -308,6 +339,7 @@ public:
   bool isFMAFasterThanFMulAndFAdd(EVT VT) const override;
   SDValue splitUnaryVectorOp(SDValue Op, SelectionDAG &DAG) const;
   SDValue splitBinaryVectorOp(SDValue Op, SelectionDAG &DAG) const;
+  SDValue splitTernaryVectorOp(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
 
   void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
@@ -351,6 +383,34 @@ public:
                                     bool SNaN = false,
                                     unsigned Depth = 0) const override;
   AtomicExpansionKind shouldExpandAtomicRMWInIR(AtomicRMWInst *) const override;
+
+  llvm::Align getPrefLoopAlignment(MachineLoop *ML) const override;
+
+  void allocateHSAUserSGPRs(CCState &CCInfo,
+                            MachineFunction &MF,
+                            const SIRegisterInfo &TRI,
+                            SIMachineFunctionInfo &Info) const;
+
+  void allocateSystemSGPRs(CCState &CCInfo,
+                           MachineFunction &MF,
+                           SIMachineFunctionInfo &Info,
+                           CallingConv::ID CallConv,
+                           bool IsShader) const;
+
+  void allocateSpecialEntryInputVGPRs(CCState &CCInfo,
+                                      MachineFunction &MF,
+                                      const SIRegisterInfo &TRI,
+                                      SIMachineFunctionInfo &Info) const;
+  void allocateSpecialInputSGPRs(
+    CCState &CCInfo,
+    MachineFunction &MF,
+    const SIRegisterInfo &TRI,
+    SIMachineFunctionInfo &Info) const;
+
+  void allocateSpecialInputVGPRs(CCState &CCInfo,
+                                 MachineFunction &MF,
+                                 const SIRegisterInfo &TRI,
+                                 SIMachineFunctionInfo &Info) const;
 };
 
 } // End namespace llvm

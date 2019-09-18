@@ -58,23 +58,23 @@ namespace {
 std::unique_ptr<raw_fd_ostream> llvm::CreateInfoOutputFile() {
   const std::string &OutputFilename = getLibSupportInfoOutputFilename();
   if (OutputFilename.empty())
-    return llvm::make_unique<raw_fd_ostream>(2, false); // stderr.
+    return std::make_unique<raw_fd_ostream>(2, false); // stderr.
   if (OutputFilename == "-")
-    return llvm::make_unique<raw_fd_ostream>(1, false); // stdout.
+    return std::make_unique<raw_fd_ostream>(1, false); // stdout.
 
   // Append mode is used because the info output file is opened and closed
   // each time -stats or -time-passes wants to print output to it. To
   // compensate for this, the test-suite Makefiles have code to delete the
   // info output file before running commands which write to it.
   std::error_code EC;
-  auto Result = llvm::make_unique<raw_fd_ostream>(
-      OutputFilename, EC, sys::fs::F_Append | sys::fs::F_Text);
+  auto Result = std::make_unique<raw_fd_ostream>(
+      OutputFilename, EC, sys::fs::OF_Append | sys::fs::OF_Text);
   if (!EC)
     return Result;
 
   errs() << "Error opening info-output-file '"
     << OutputFilename << " for appending!\n";
-  return llvm::make_unique<raw_fd_ostream>(2, false); // stderr.
+  return std::make_unique<raw_fd_ostream>(2, false); // stderr.
 }
 
 namespace {
@@ -347,7 +347,7 @@ void TimerGroup::PrintQueuedTimers(raw_ostream &OS) {
   TimersToPrint.clear();
 }
 
-void TimerGroup::prepareToPrintList() {
+void TimerGroup::prepareToPrintList(bool ResetTime) {
   // See if any of our timers were started, if so add them to TimersToPrint.
   for (Timer *T = FirstTimer; T; T = T->Next) {
     if (!T->hasTriggered()) continue;
@@ -357,15 +357,20 @@ void TimerGroup::prepareToPrintList() {
 
     TimersToPrint.emplace_back(T->Time, T->Name, T->Description);
 
+    if (ResetTime)
+      T->clear();
+
     if (WasRunning)
       T->startTimer();
   }
 }
 
-void TimerGroup::print(raw_ostream &OS) {
-  sys::SmartScopedLock<true> L(*TimerLock);
-
-  prepareToPrintList();
+void TimerGroup::print(raw_ostream &OS, bool ResetAfterPrint) {
+  {
+    // After preparing the timers we can free the lock
+    sys::SmartScopedLock<true> L(*TimerLock);
+    prepareToPrintList(ResetAfterPrint);
+  }
 
   // If any timers were started, print the group.
   if (!TimersToPrint.empty())
@@ -405,7 +410,7 @@ void TimerGroup::printJSONValue(raw_ostream &OS, const PrintRecord &R,
 const char *TimerGroup::printJSONValues(raw_ostream &OS, const char *delim) {
   sys::SmartScopedLock<true> L(*TimerLock);
 
-  prepareToPrintList();
+  prepareToPrintList(false);
   for (const PrintRecord &R : TimersToPrint) {
     OS << delim;
     delim = ",\n";

@@ -28,9 +28,12 @@ static_library("clang-tidy") {
 
   sources = [
     "ClangTidy.cpp",
+    "ClangTidyCheck.cpp",
     "ClangTidyDiagnosticConsumer.cpp",
     "ClangTidyModule.cpp",
     "ClangTidyOptions.cpp",
     "ClangTidyProfiling.cpp",
+    "ExpandModularHeadersPPCallbacks.cpp",
+    "GlobList.cpp",
   ]
 }

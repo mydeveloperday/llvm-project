@@ -46,6 +46,7 @@ add_llvm_library(LLVMCore
   PassManager.cpp
   PassRegistry.cpp
   PassTimingInfo.cpp
+  RemarkStreamer.cpp
   SafepointIRVerifier.cpp
   ProfileSummary.cpp
   Statepoint.cpp
@@ -59,6 +60,8 @@ add_llvm_library(LLVMCore
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/IR
+
+  LINK_LIBS ${LLVM_PTHREAD_LIB}
 
   DEPENDS
   intrinsics_gen

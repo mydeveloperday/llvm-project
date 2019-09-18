@@ -26,8 +26,8 @@ set python64_dir=C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python36
 
 set revision=%1
 set branch=trunk
-set package_version=9.0.0-r%revision%
-set clang_format_vs_version=9.0.0.%revision%
+set package_version=10.0.0-r%revision%
+set clang_format_vs_version=10.0.0.%revision%
 set build_dir=llvm_package_%revision%
 
 echo Branch: %branch%
@@ -52,7 +52,17 @@ svn.exe export -r %revision% http://llvm.org/svn/llvm-project/lldb/%branch% llvm
 
 
 REM Setting CMAKE_CL_SHOWINCLUDES_PREFIX to work around PR27226.
-set cmake_flags=-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON -DCMAKE_INSTALL_UCRT_LIBRARIES=ON -DCLANG_FORMAT_VS_VERSION=%clang_format_vs_version% -DPACKAGE_VERSION=%package_version% -DLLDB_RELOCATABLE_PYTHON=1 -DLLDB_TEST_COMPILER=%cd%\build32_stage0\bin\clang.exe -DCMAKE_CL_SHOWINCLUDES_PREFIX="Note: including file: "
+set cmake_flags=^
+	-DCMAKE_BUILD_TYPE=Release ^
+	-DLLVM_ENABLE_ASSERTIONS=ON ^
+	-DLLVM_INSTALL_TOOLCHAIN_ONLY=ON ^
+	-DLLVM_BUILD_LLVM_C_DYLIB=ON ^
+	-DCMAKE_INSTALL_UCRT_LIBRARIES=ON ^
+	-DCLANG_FORMAT_VS_VERSION=%clang_format_vs_version% ^
+	-DPACKAGE_VERSION=%package_version% ^
+	-DLLDB_RELOCATABLE_PYTHON=1 ^
+	-DLLDB_TEST_COMPILER=%cd%\build32_stage0\bin\clang.exe ^
+	-DCMAKE_CL_SHOWINCLUDES_PREFIX="Note: including file: "
 
 REM TODO: Run the "check-all" tests.
 
@@ -63,7 +73,7 @@ set CXX=
 mkdir build32_stage0
 cd build32_stage0
 REM Work around VS2017 bug by using MinSizeRel.
-cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python32_dir% -DCMAKE_BUILD_TYPE=MinSizeRel ..\llvm || exit /b
+cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python32_dir% -DPYTHON_EXECUTABLE=%python32_dir%\python.exe -DCMAKE_BUILD_TYPE=MinSizeRel ..\llvm || exit /b
 ninja all || ninja all || ninja all || exit /b
 ninja check || ninja check || ninja check || exit /b
 ninja check-clang || ninja check-clang || ninja check-clang || exit /b
@@ -75,7 +85,7 @@ mkdir build32
 cd build32
 set CC=..\build32_stage0\bin\clang-cl
 set CXX=..\build32_stage0\bin\clang-cl
-cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python32_dir% ..\llvm || exit /b
+cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python32_dir% -DPYTHON_EXECUTABLE=%python32_dir%\python.exe ..\llvm || exit /b
 ninja all || ninja all || ninja all || exit /b
 ninja check || ninja check || ninja check || exit /b
 ninja check-clang || ninja check-clang || ninja check-clang || exit /b
@@ -89,7 +99,7 @@ mkdir build_vsix
 cd build_vsix
 set CC=..\build32_stage0\bin\clang-cl
 set CXX=..\build32_stage0\bin\clang-cl
-cmake -GNinja %cmake_flags% -DLLVM_USE_CRT_RELEASE=MT -DBUILD_CLANG_FORMAT_VS_PLUGIN=ON -DPYTHON_HOME=%python32_dir% ..\llvm || exit /b
+cmake -GNinja %cmake_flags% -DLLVM_USE_CRT_RELEASE=MT -DBUILD_CLANG_FORMAT_VS_PLUGIN=ON -DPYTHON_HOME=%python32_dir% -DPYTHON_EXECUTABLE=%python32_dir%\python.exe ..\llvm || exit /b
 ninja clang_format_vsix || exit /b
 copy ..\llvm\tools\clang\tools\clang-format-vs\ClangFormat\bin\Release\ClangFormat.vsix ClangFormat-r%revision%.vsix
 cd ..
@@ -102,7 +112,7 @@ set CXX=
 mkdir build64_stage0
 cd build64_stage0
 REM Work around VS2017 bug by using MinSizeRel.
-cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python64_dir% -DCMAKE_BUILD_TYPE=MinSizeRel ..\llvm || exit /b
+cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python64_dir% -DPYTHON_EXECUTABLE=%python64_dir%\python.exe -DCMAKE_BUILD_TYPE=MinSizeRel ..\llvm || exit /b
 ninja all || ninja all || ninja all || exit /b
 ninja check || ninja check || ninja check || exit /b
 ninja check-clang || ninja check-clang || ninja check-clang || exit /b
@@ -114,7 +124,7 @@ mkdir build64
 cd build64
 set CC=..\build64_stage0\bin\clang-cl
 set CXX=..\build64_stage0\bin\clang-cl
-cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python64_dir% ..\llvm || exit /b
+cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python64_dir% -DPYTHON_EXECUTABLE=%python64_dir%\python.exe ..\llvm || exit /b
 ninja all || ninja all || ninja all || exit /b
 ninja check || ninja check || ninja check || exit /b
 ninja check-clang || ninja check-clang || ninja check-clang || exit /b

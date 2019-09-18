@@ -32,6 +32,7 @@ namespace llvm {
 
 class AMDGPUMachineFunction;
 class AMDGPUTargetStreamer;
+class MCCodeEmitter;
 class MCOperand;
 class GCNSubtarget;
 
@@ -56,12 +57,12 @@ private:
   DenseMap<const Function *, SIFunctionResourceInfo> CallGraphResourceInfo;
 
   std::unique_ptr<AMDGPU::HSAMD::MetadataStreamer> HSAMetadataStream;
-  std::map<uint32_t, uint32_t> PALMetadataMap;
+
+  MCCodeEmitter *DumpCodeInstEmitter = nullptr;
 
   uint64_t getFunctionCodeSize(const MachineFunction &MF) const;
   SIFunctionResourceInfo analyzeResourceUsage(const MachineFunction &MF) const;
 
-  void readPALMetadata(Module &M);
   void getSIProgramInfo(SIProgramInfo &Out, const MachineFunction &MF);
   void getAmdKernelCode(amd_kernel_code_t &Out, const SIProgramInfo &KernelInfo,
                         const MachineFunction &MF) const;
@@ -124,7 +125,7 @@ public:
 
   void EmitFunctionEntryLabel() override;
 
-  void EmitBasicBlockStart(const MachineBasicBlock &MBB) const override;
+  void EmitBasicBlockStart(const MachineBasicBlock &MBB) override;
 
   void EmitGlobalVariable(const GlobalVariable *GV) override;
 
@@ -136,12 +137,11 @@ public:
     const MachineBasicBlock *MBB) const override;
 
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
-                       unsigned AsmVariant, const char *ExtraCode,
-                       raw_ostream &O) override;
+                       const char *ExtraCode, raw_ostream &O) override;
 
 protected:
-  mutable std::vector<std::string> DisasmLines, HexLines;
-  mutable size_t DisasmLineMaxLen;
+  std::vector<std::string> DisasmLines, HexLines;
+  size_t DisasmLineMaxLen;
 };
 
 } // end namespace llvm

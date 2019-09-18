@@ -10,6 +10,7 @@
 #define LLVM_TOOLS_LLVM_OBJCOPY_COPY_CONFIG_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -25,24 +26,59 @@
 namespace llvm {
 namespace objcopy {
 
+enum class FileFormat {
+  Unspecified,
+  ELF,
+  Binary,
+  IHex,
+};
+
 // This type keeps track of the machine info for various architectures. This
 // lets us map architecture names to ELF types and the e_machine value of the
 // ELF file.
 struct MachineInfo {
+  MachineInfo(uint16_t EM, uint8_t ABI, bool Is64, bool IsLittle)
+      : EMachine(EM), OSABI(ABI), Is64Bit(Is64), IsLittleEndian(IsLittle) {}
+  // Alternative constructor that defaults to NONE for OSABI.
+  MachineInfo(uint16_t EM, bool Is64, bool IsLittle)
+      : MachineInfo(EM, ELF::ELFOSABI_NONE, Is64, IsLittle) {}
+  // Default constructor for unset fields.
+  MachineInfo() : MachineInfo(0, 0, false, false) {}
   uint16_t EMachine;
+  uint8_t OSABI;
   bool Is64Bit;
   bool IsLittleEndian;
+};
+
+// Flags set by --set-section-flags or --rename-section. Interpretation of these
+// is format-specific and not all flags are meaningful for all object file
+// formats. This is a bitmask; many section flags may be set.
+enum SectionFlag {
+  SecNone = 0,
+  SecAlloc = 1 << 0,
+  SecLoad = 1 << 1,
+  SecNoload = 1 << 2,
+  SecReadonly = 1 << 3,
+  SecDebug = 1 << 4,
+  SecCode = 1 << 5,
+  SecData = 1 << 6,
+  SecRom = 1 << 7,
+  SecMerge = 1 << 8,
+  SecStrings = 1 << 9,
+  SecContents = 1 << 10,
+  SecShare = 1 << 11,
+  LLVM_MARK_AS_BITMASK_ENUM(/* LargestValue = */ SecShare)
 };
 
 struct SectionRename {
   StringRef OriginalName;
   StringRef NewName;
-  Optional<uint64_t> NewFlags;
+  Optional<SectionFlag> NewFlags;
 };
 
 struct SectionFlagsUpdate {
   StringRef Name;
-  uint64_t NewFlags;
+  SectionFlag NewFlags;
 };
 
 enum class DiscardType {
@@ -62,6 +98,19 @@ public:
   bool operator!=(StringRef S) const { return !operator==(S); }
 };
 
+// Matcher that checks symbol or section names against the command line flags
+// provided for that option.
+class NameMatcher {
+  std::vector<NameOrRegex> Matchers;
+
+public:
+  void addMatcher(NameOrRegex Matcher) {
+    Matchers.push_back(std::move(Matcher));
+  }
+  bool matches(StringRef S) const { return is_contained(Matchers, S); }
+  bool empty() const { return Matchers.empty(); }
+};
+
 struct NewSymbolInfo {
   StringRef SymbolName;
   StringRef SectionName;
@@ -75,38 +124,45 @@ struct NewSymbolInfo {
 struct CopyConfig {
   // Main input/output options
   StringRef InputFilename;
-  StringRef InputFormat;
+  FileFormat InputFormat;
   StringRef OutputFilename;
-  StringRef OutputFormat;
+  FileFormat OutputFormat;
 
-  // Only applicable for --input-format=binary
-  MachineInfo BinaryArch;
   // Only applicable when --output-format!=binary (e.g. elf64-x86-64).
   Optional<MachineInfo> OutputArch;
 
   // Advanced options
   StringRef AddGnuDebugLink;
+  // Cached gnu_debuglink's target CRC
+  uint32_t GnuDebugLinkCRC32;
   StringRef BuildIdLinkDir;
   Optional<StringRef> BuildIdLinkInput;
   Optional<StringRef> BuildIdLinkOutput;
+  Optional<StringRef> ExtractPartition;
   StringRef SplitDWO;
   StringRef SymbolsPrefix;
+  StringRef AllocSectionsPrefix;
   DiscardType DiscardMode = DiscardType::None;
+  Optional<uint8_t> NewSymbolVisibility;
 
   // Repeated options
   std::vector<StringRef> AddSection;
   std::vector<StringRef> DumpSection;
   std::vector<NewSymbolInfo> SymbolsToAdd;
-  std::vector<NameOrRegex> KeepSection;
-  std::vector<NameOrRegex> OnlySection;
-  std::vector<NameOrRegex> SymbolsToGlobalize;
-  std::vector<NameOrRegex> SymbolsToKeep;
-  std::vector<NameOrRegex> SymbolsToLocalize;
-  std::vector<NameOrRegex> SymbolsToRemove;
-  std::vector<NameOrRegex> UnneededSymbolsToRemove;
-  std::vector<NameOrRegex> SymbolsToWeaken;
-  std::vector<NameOrRegex> ToRemove;
-  std::vector<NameOrRegex> SymbolsToKeepGlobal;
+
+  // Section matchers
+  NameMatcher KeepSection;
+  NameMatcher OnlySection;
+  NameMatcher ToRemove;
+
+  // Symbol matchers
+  NameMatcher SymbolsToGlobalize;
+  NameMatcher SymbolsToKeep;
+  NameMatcher SymbolsToLocalize;
+  NameMatcher SymbolsToRemove;
+  NameMatcher UnneededSymbolsToRemove;
+  NameMatcher SymbolsToWeaken;
+  NameMatcher SymbolsToKeepGlobal;
 
   // Map options
   StringMap<SectionRename> SectionsToRename;
@@ -120,8 +176,10 @@ struct CopyConfig {
   std::function<uint64_t(uint64_t)> EntryExpr;
 
   // Boolean options
+  bool AllowBrokenLinks = false;
   bool DeterministicArchives = true;
   bool ExtractDWO = false;
+  bool ExtractMainPartition = false;
   bool KeepFileSymbols = false;
   bool LocalizeHidden = false;
   bool OnlyKeepDebug = false;
@@ -153,8 +211,11 @@ Expected<DriverConfig> parseObjcopyOptions(ArrayRef<const char *> ArgsArr);
 
 // ParseStripOptions returns the config and sets the input arguments. If a
 // help flag is set then ParseStripOptions will print the help messege and
-// exit.
-Expected<DriverConfig> parseStripOptions(ArrayRef<const char *> ArgsArr);
+// exit. ErrorCallback is used to handle recoverable errors. An Error returned
+// by the callback aborts the parsing and is then returned by this function.
+Expected<DriverConfig>
+parseStripOptions(ArrayRef<const char *> ArgsArr,
+                  std::function<Error(Error)> ErrorCallback);
 
 } // namespace objcopy
 } // namespace llvm

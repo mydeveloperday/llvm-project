@@ -22,14 +22,14 @@ class ConstString;
 using namespace lldb_private;
 
 lldb::ValueObjectSP ValueObjectCast::Create(ValueObject &parent,
-                                            const ConstString &name,
+                                            ConstString name,
                                             const CompilerType &cast_type) {
   ValueObjectCast *cast_valobj_ptr =
       new ValueObjectCast(parent, name, cast_type);
   return cast_valobj_ptr->GetSP();
 }
 
-ValueObjectCast::ValueObjectCast(ValueObject &parent, const ConstString &name,
+ValueObjectCast::ValueObjectCast(ValueObject &parent, ConstString name,
                                  const CompilerType &cast_type)
     : ValueObject(parent), m_cast_type(cast_type) {
   SetName(name);
@@ -79,7 +79,7 @@ bool ValueObjectCast::UpdateValue() {
                         m_value.GetScalar() != old_value.GetScalar());
     }
     ExecutionContext exe_ctx(GetExecutionContextRef());
-    m_error = m_value.GetValueAsData(&exe_ctx, m_data, 0, GetModule().get());
+    m_error = m_value.GetValueAsData(&exe_ctx, m_data, GetModule().get());
     SetValueDidChange(m_parent->GetValueDidChange());
     return true;
   }

@@ -4,7 +4,7 @@
 # RUN: echo "V1 { global: a; local: *; };" > %t.script
 # RUN: echo "V2 { global: b; c; } V1;" >> %t.script
 # RUN: ld.lld --hash-style=sysv -shared -soname shared %t1 --version-script %t.script -o %t.so
-# RUN: llvm-readobj -V -dyn-symbols %t.so | FileCheck --check-prefix=DSO %s
+# RUN: llvm-readobj -V --dyn-syms %t.so | FileCheck --check-prefix=DSO %s
 
 # DSO:      DynamicSymbols [
 # DSO-NEXT:    Symbol {
@@ -18,7 +18,7 @@
 # DSO-NEXT:    }
 # DSO-NEXT:    Symbol {
 # DSO-NEXT:      Name: a@@V1
-# DSO-NEXT:      Value: 0x1000
+# DSO-NEXT:      Value: 0x12E8
 # DSO-NEXT:      Size: 0
 # DSO-NEXT:      Binding: Global
 # DSO-NEXT:      Type: Function
@@ -27,7 +27,7 @@
 # DSO-NEXT:    }
 # DSO-NEXT:    Symbol {
 # DSO-NEXT:      Name: b@@V2
-# DSO-NEXT:      Value: 0x1002
+# DSO-NEXT:      Value: 0x12EA
 # DSO-NEXT:      Size: 0
 # DSO-NEXT:      Binding: Global
 # DSO-NEXT:      Type: Function
@@ -36,7 +36,7 @@
 # DSO-NEXT:    }
 # DSO-NEXT:    Symbol {
 # DSO-NEXT:      Name: b@V1
-# DSO-NEXT:      Value: 0x1001
+# DSO-NEXT:      Value: 0x12E9
 # DSO-NEXT:      Size: 0
 # DSO-NEXT:      Binding: Global
 # DSO-NEXT:      Type: Function
@@ -45,7 +45,7 @@
 # DSO-NEXT:    }
 # DSO-NEXT:    Symbol {
 # DSO-NEXT:      Name: c@@V2
-# DSO-NEXT:      Value: 0x1003
+# DSO-NEXT:      Value: 0x12EB
 # DSO-NEXT:      Size: 0
 # DSO-NEXT:      Binding: Global
 # DSO-NEXT:      Type: Function
@@ -108,7 +108,7 @@
 ## Check that we can link against DSO produced.
 # RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux %s -o %t2
 # RUN: ld.lld --hash-style=sysv %t2 %t.so -o %t3
-# RUN: llvm-readobj -V -dyn-symbols %t3 | FileCheck --check-prefix=EXE %s
+# RUN: llvm-readobj -V --dyn-syms %t3 | FileCheck --check-prefix=EXE %s
 
 # EXE:      DynamicSymbols [
 # EXE-NEXT:    Symbol {
@@ -122,7 +122,7 @@
 # EXE-NEXT:    }
 # EXE-NEXT:    Symbol {
 # EXE-NEXT:      Name: a@V1
-# EXE-NEXT:      Value: 0x201020
+# EXE-NEXT:      Value: 0x201340
 # EXE-NEXT:      Size: 0
 # EXE-NEXT:      Binding: Global
 # EXE-NEXT:      Type: Function
@@ -131,7 +131,7 @@
 # EXE-NEXT:    }
 # EXE-NEXT:    Symbol {
 # EXE-NEXT:      Name: b@V2
-# EXE-NEXT:      Value: 0x201030
+# EXE-NEXT:      Value: 0x201350
 # EXE-NEXT:      Size: 0
 # EXE-NEXT:      Binding: Global
 # EXE-NEXT:      Type: Function
@@ -140,7 +140,7 @@
 # EXE-NEXT:    }
 # EXE-NEXT:    Symbol {
 # EXE-NEXT:      Name: c@V2
-# EXE-NEXT:      Value: 0x201040
+# EXE-NEXT:      Value: 0x201360
 # EXE-NEXT:      Size: 0
 # EXE-NEXT:      Binding: Global
 # EXE-NEXT:      Type: Function
@@ -150,8 +150,8 @@
 # EXE-NEXT:  ]
 # EXE-NEXT:  Version symbols {
 # EXE-NEXT:    Section Name: .gnu.version
-# EXE-NEXT:    Address: 0x200228
-# EXE-NEXT:    Offset: 0x228
+# EXE-NEXT:    Address: 0x200260
+# EXE-NEXT:    Offset: 0x260
 # EXE-NEXT:    Link: 1
 # EXE-NEXT:    Symbols [
 # EXE-NEXT:      Symbol {
@@ -179,18 +179,20 @@
 # EXE-NEXT:      Version: 1
 # EXE-NEXT:      Count: 2
 # EXE-NEXT:      FileName: shared
-# EXE-NEXT:      Entry {
-# EXE-NEXT:        Hash: 1425
-# EXE-NEXT:        Flags: 0x0
-# EXE-NEXT:        Index: 2
-# EXE-NEXT:        Name: V1
-# EXE-NEXT:      }
-# EXE-NEXT:      Entry {
-# EXE-NEXT:        Hash: 1426
-# EXE-NEXT:        Flags: 0x0
-# EXE-NEXT:        Index: 3
-# EXE-NEXT:        Name: V2
-# EXE-NEXT:      }
+# EXE-NEXT:      Entries [
+# EXE-NEXT:        Entry {
+# EXE-NEXT:          Hash: 1425
+# EXE-NEXT:          Flags: 0x0
+# EXE-NEXT:          Index: 2
+# EXE-NEXT:          Name: V1
+# EXE-NEXT:        }
+# EXE-NEXT:        Entry {
+# EXE-NEXT:          Hash: 1426
+# EXE-NEXT:          Flags: 0x0
+# EXE-NEXT:          Index: 3
+# EXE-NEXT:          Name: V2
+# EXE-NEXT:        }
+# EXE-NEXT:      ]
 # EXE-NEXT:    }
 # EXE-NEXT:  }
 

@@ -267,7 +267,7 @@ inline bool addr_is_type(uptr addr, MappingDesc::Type mapping_type) {
 #define MEM_IS_SHADOW(mem) addr_is_type((uptr)(mem), MappingDesc::SHADOW)
 #define MEM_IS_ORIGIN(mem) addr_is_type((uptr)(mem), MappingDesc::ORIGIN)
 
-// These constants must be kept in sync with the ones in MemorySanitizer.cc.
+// These constants must be kept in sync with the ones in MemorySanitizer.cpp.
 const int kMsanParamTlsSize = 800;
 const int kMsanRetvalTlsSize = 800;
 
@@ -288,6 +288,7 @@ void MsanDeallocate(StackTrace *stack, void *ptr);
 void *msan_malloc(uptr size, StackTrace *stack);
 void *msan_calloc(uptr nmemb, uptr size, StackTrace *stack);
 void *msan_realloc(void *ptr, uptr size, StackTrace *stack);
+void *msan_reallocarray(void *ptr, uptr nmemb, uptr size, StackTrace *stack);
 void *msan_valloc(uptr size, StackTrace *stack);
 void *msan_pvalloc(uptr size, StackTrace *stack);
 void *msan_aligned_alloc(uptr alignment, uptr size, StackTrace *stack);
@@ -325,33 +326,31 @@ const int STACK_TRACE_TAG_POISON = StackTrace::TAG_CUSTOM + 1;
 #define GET_MALLOC_STACK_TRACE                                            \
   BufferedStackTrace stack;                                               \
   if (__msan_get_track_origins() && msan_inited)                          \
-  GetStackTrace(&stack, common_flags()->malloc_context_size,              \
-                StackTrace::GetCurrentPc(), GET_CURRENT_FRAME(), nullptr, \
-                common_flags()->fast_unwind_on_malloc)
+    stack.Unwind(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME(),         \
+                 nullptr, common_flags()->fast_unwind_on_malloc,          \
+                 common_flags()->malloc_context_size)
 
 // For platforms which support slow unwinder only, we restrict the store context
 // size to 1, basically only storing the current pc. We do this because the slow
 // unwinder which is based on libunwind is not async signal safe and causes
 // random freezes in forking applications as well as in signal handlers.
-#define GET_STORE_STACK_TRACE_PC_BP(pc, bp)                               \
-  BufferedStackTrace stack;                                               \
-  if (__msan_get_track_origins() > 1 && msan_inited) {                    \
-    if (!SANITIZER_CAN_FAST_UNWIND)                                       \
-      GetStackTrace(&stack, Min(1, flags()->store_context_size), pc, bp,  \
-                    nullptr, false);                                      \
-    else                                                                  \
-      GetStackTrace(&stack, flags()->store_context_size, pc, bp, nullptr, \
-                    common_flags()->fast_unwind_on_malloc);               \
+#define GET_STORE_STACK_TRACE_PC_BP(pc, bp)                                    \
+  BufferedStackTrace stack;                                                    \
+  if (__msan_get_track_origins() > 1 && msan_inited) {                         \
+    int size = flags()->store_context_size;                                    \
+    if (!SANITIZER_CAN_FAST_UNWIND)                                            \
+      size = Min(size, 1);                                                     \
+    stack.Unwind(pc, bp, nullptr, common_flags()->fast_unwind_on_malloc, size);\
   }
 
 #define GET_STORE_STACK_TRACE \
   GET_STORE_STACK_TRACE_PC_BP(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME())
 
-#define GET_FATAL_STACK_TRACE_PC_BP(pc, bp)              \
-  BufferedStackTrace stack;                              \
-  if (msan_inited)                                       \
-  GetStackTrace(&stack, kStackTraceMax, pc, bp, nullptr, \
-                common_flags()->fast_unwind_on_fatal)
+#define GET_FATAL_STACK_TRACE_PC_BP(pc, bp)                              \
+  BufferedStackTrace stack;                                              \
+  if (msan_inited) {                                                     \
+    stack.Unwind(pc, bp, nullptr, common_flags()->fast_unwind_on_fatal); \
+  }
 
 #define GET_FATAL_STACK_TRACE_HERE \
   GET_FATAL_STACK_TRACE_PC_BP(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME())

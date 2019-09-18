@@ -43,6 +43,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
@@ -77,10 +78,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "codegen"
 
-static cl::opt<unsigned>
-AlignAllFunctions("align-all-functions",
-                  cl::desc("Force the alignment of all functions."),
-                  cl::init(0), cl::Hidden);
+static cl::opt<unsigned> AlignAllFunctions(
+    "align-all-functions",
+    cl::desc("Force the alignment of all functions in log2 format (e.g. 4 "
+             "means align on 16B boundaries)."),
+    cl::init(0), cl::Hidden);
 
 static const char *getPropertyName(MachineFunctionProperties::Property Prop) {
   using P = MachineFunctionProperties::Property;
@@ -164,7 +166,7 @@ void MachineFunction::init() {
                       !F.hasFnAttribute("no-realign-stack");
   FrameInfo = new (Allocator) MachineFrameInfo(
       getFnStackAlignment(STI, F), /*StackRealignable=*/CanRealignSP,
-      /*ForceRealign=*/CanRealignSP &&
+      /*ForcedRealign=*/CanRealignSP &&
           F.hasFnAttribute(Attribute::StackAlignment));
 
   if (F.hasFnAttribute(Attribute::StackAlignment))
@@ -174,13 +176,13 @@ void MachineFunction::init() {
   Alignment = STI->getTargetLowering()->getMinFunctionAlignment();
 
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on F.
-  // FIXME: Use Function::optForSize().
+  // FIXME: Use Function::hasOptSize().
   if (!F.hasFnAttribute(Attribute::OptimizeForSize))
     Alignment = std::max(Alignment,
                          STI->getTargetLowering()->getPrefFunctionAlignment());
 
   if (AlignAllFunctions)
-    Alignment = AlignAllFunctions;
+    Alignment = llvm::Align(1ULL << AlignAllFunctions);
 
   JumpTableInfo = nullptr;
 
@@ -199,7 +201,7 @@ void MachineFunction::init() {
          "Target-incompatible DataLayout attached\n");
 
   PSVManager =
-    llvm::make_unique<PseudoSourceValueManager>(*(getSubtarget().
+    std::make_unique<PseudoSourceValueManager>(*(getSubtarget().
                                                   getInstrInfo()));
 }
 
@@ -271,6 +273,12 @@ getOrCreateJumpTableInfo(unsigned EntryKind) {
 /// Should we be emitting segmented stack stuff for the function
 bool MachineFunction::shouldSplitStack() const {
   return getFunction().hasFnAttribute("split-stack");
+}
+
+LLVM_NODISCARD unsigned
+MachineFunction::addFrameInst(const MCCFIInstruction &Inst) {
+  FrameInstructions.push_back(Inst);
+  return FrameInstructions.size() - 1;
 }
 
 /// This discards all of the MachineBasicBlock numbers and recomputes them.
@@ -356,6 +364,13 @@ MachineInstr &MachineFunction::CloneMachineInstrBundle(MachineBasicBlock &MBB,
 /// ~MachineInstr() destructor must be empty.
 void
 MachineFunction::DeleteMachineInstr(MachineInstr *MI) {
+  // Verify that a call site info is at valid state. This assertion should
+  // be triggered during the implementation of support for the
+  // call site info of a new architecture. If the assertion is triggered,
+  // back trace will tell where to insert a call to updateCallSiteInfo().
+  assert((!MI->isCall(MachineInstr::IgnoreBundle) ||
+          CallSitesInfo.find(MI) == CallSitesInfo.end()) &&
+         "Call site info was not updated!");
   // Strip it for parts. The operand array and the MI object itself are
   // independently recyclable.
   if (MI->Operands)
@@ -421,6 +436,15 @@ MachineFunction::getMachineMemOperand(const MachineMemOperand *MMO,
                                MMO->getBaseAlignment(), AAInfo,
                                MMO->getRanges(), MMO->getSyncScopeID(),
                                MMO->getOrdering(), MMO->getFailureOrdering());
+}
+
+MachineMemOperand *
+MachineFunction::getMachineMemOperand(const MachineMemOperand *MMO,
+                                      MachineMemOperand::Flags Flags) {
+  return new (Allocator) MachineMemOperand(
+      MMO->getPointerInfo(), Flags, MMO->getSize(), MMO->getBaseAlignment(),
+      MMO->getAAInfo(), MMO->getRanges(), MMO->getSyncScopeID(),
+      MMO->getOrdering(), MMO->getFailureOrdering());
 }
 
 MachineInstr::ExtraInfo *
@@ -800,6 +824,33 @@ try_next:;
   return FilterID;
 }
 
+void MachineFunction::addCodeViewHeapAllocSite(MachineInstr *I,
+                                               const MDNode *MD) {
+  MCSymbol *BeginLabel = Ctx.createTempSymbol("heapallocsite", true);
+  MCSymbol *EndLabel = Ctx.createTempSymbol("heapallocsite", true);
+  I->setPreInstrSymbol(*this, BeginLabel);
+  I->setPostInstrSymbol(*this, EndLabel);
+
+  const DIType *DI = dyn_cast<DIType>(MD);
+  CodeViewHeapAllocSites.push_back(std::make_tuple(BeginLabel, EndLabel, DI));
+}
+
+void MachineFunction::updateCallSiteInfo(const MachineInstr *Old,
+                                         const MachineInstr *New) {
+  if (!Target.Options.EnableDebugEntryValues || Old == New)
+    return;
+
+  assert(Old->isCall() && (!New || New->isCall()) &&
+         "Call site info referes only to call instructions!");
+  CallSiteInfoMap::iterator CSIt = CallSitesInfo.find(Old);
+  if (CSIt == CallSitesInfo.end())
+    return;
+  CallSiteInfo CSInfo = std::move(CSIt->second);
+  CallSitesInfo.erase(CSIt);
+  if (New)
+    CallSitesInfo[New] = CSInfo;
+}
+
 /// \}
 
 //===----------------------------------------------------------------------===//
@@ -886,9 +937,11 @@ void MachineJumpTableInfo::print(raw_ostream &OS) const {
   OS << "Jump Tables:\n";
 
   for (unsigned i = 0, e = JumpTables.size(); i != e; ++i) {
-    OS << printJumpTableEntryReference(i) << ": ";
+    OS << printJumpTableEntryReference(i) << ':';
     for (unsigned j = 0, f = JumpTables[i].MBBs.size(); j != f; ++j)
       OS << ' ' << printMBBReference(*JumpTables[i].MBBs[j]);
+    if (i != e)
+      OS << '\n';
   }
 
   OS << '\n';

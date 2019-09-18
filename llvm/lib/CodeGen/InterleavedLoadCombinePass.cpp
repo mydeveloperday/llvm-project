@@ -940,8 +940,8 @@ public:
   /// \param V input value
   /// \param Result result polynomial
   static void computePolynomial(Value &V, Polynomial &Result) {
-    if (isa<BinaryOperator>(&V))
-      computePolynomialBinOp(*dyn_cast<BinaryOperator>(&V), Result);
+    if (auto *BO = dyn_cast<BinaryOperator>(&V))
+      computePolynomialBinOp(*BO, Result);
     else
       Result = Polynomial(&V);
   }
@@ -960,6 +960,7 @@ public:
     if (!PtrTy) {
       Result = Polynomial();
       BasePtr = nullptr;
+      return;
     }
     unsigned PointerBits =
         DL.getIndexSizeInBits(PtrTy->getPointerAddressSpace());

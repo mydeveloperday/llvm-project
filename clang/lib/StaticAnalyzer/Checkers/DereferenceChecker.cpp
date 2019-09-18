@@ -1,4 +1,4 @@
-//== NullDerefChecker.cpp - Null dereference checker ------------*- C++ -*--==//
+//===-- DereferenceChecker.cpp - Null dereference checker -----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -179,7 +179,7 @@ void DereferenceChecker::reportBug(ProgramStateRef State, const Stmt *S,
     break;
   }
 
-  auto report = llvm::make_unique<BugReport>(
+  auto report = std::make_unique<PathSensitiveBugReport>(
       *BT_null, buf.empty() ? BT_null->getDescription() : StringRef(buf), N);
 
   bugreporter::trackExpressionValue(N, bugreporter::getDerefExpr(S), *report);
@@ -200,8 +200,8 @@ void DereferenceChecker::checkLocation(SVal l, bool isLoad, const Stmt* S,
         BT_undef.reset(
             new BuiltinBug(this, "Dereference of undefined pointer value"));
 
-      auto report =
-          llvm::make_unique<BugReport>(*BT_undef, BT_undef->getDescription(), N);
+      auto report = std::make_unique<PathSensitiveBugReport>(
+          *BT_undef, BT_undef->getDescription(), N);
       bugreporter::trackExpressionValue(N, bugreporter::getDerefExpr(S), *report);
       C.emitReport(std::move(report));
     }

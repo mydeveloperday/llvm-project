@@ -13,7 +13,7 @@
 #include "lldb/Core/ModuleList.h"
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/SymbolContext.h"
-#include "lldb/Symbol/SymbolVendor.h"
+#include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/Status.h"
@@ -71,10 +71,6 @@ void Searcher::GetDescription(Stream *s) {}
 
 SearchFilter::SearchFilter(const TargetSP &target_sp, unsigned char filterType)
     : m_target_sp(target_sp), SubclassID(filterType) {}
-
-SearchFilter::SearchFilter(const SearchFilter &rhs) = default;
-
-SearchFilter &SearchFilter::operator=(const SearchFilter &rhs) = default;
 
 SearchFilter::~SearchFilter() = default;
 
@@ -171,9 +167,7 @@ lldb::SearchFilterSP SearchFilter::CopyForBreakpoint(Breakpoint &breakpoint) {
   return ret_sp;
 }
 
-//----------------------------------------------------------------------
 // Helper functions for serialization.
-//----------------------------------------------------------------------
 
 StructuredData::DictionarySP
 SearchFilter::WrapOptionsDict(StructuredData::DictionarySP options_dict_sp) {
@@ -204,10 +198,8 @@ void SearchFilter::SerializeFileSpecList(
   options_dict_sp->AddItem(GetKey(name), module_array_sp);
 }
 
-//----------------------------------------------------------------------
 // UTILITY Functions to help iterate down through the elements of the
 // SymbolContext.
-//----------------------------------------------------------------------
 
 void SearchFilter::Search(Searcher &searcher) {
   SymbolContext empty_sc;
@@ -324,10 +316,10 @@ SearchFilter::DoCUIteration(const ModuleSP &module_sp,
           // First make sure this compile unit's functions are parsed
           // since CompUnit::ForeachFunction only iterates over already
           // parsed functions.
-          SymbolVendor *sym_vendor = module_sp->GetSymbolVendor();
-          if (!sym_vendor)
+          SymbolFile *sym_file = module_sp->GetSymbolFile();
+          if (!sym_file)
             continue;
-          if (!sym_vendor->ParseFunctions(*cu_sp))
+          if (!sym_file->ParseFunctions(*cu_sp))
             continue;
           // If we got any functions, use ForeachFunction to do the iteration.
           cu_sp->ForeachFunction([&](const FunctionSP &func_sp) {
@@ -363,11 +355,9 @@ Searcher::CallbackReturn SearchFilter::DoFunctionIteration(
   return Searcher::eCallbackReturnContinue;
 }
 
-//----------------------------------------------------------------------
 //  SearchFilterForUnconstrainedSearches:
 //  Selects a shared library matching a given file spec, consulting the targets
 //  "black list".
-//----------------------------------------------------------------------
 SearchFilterSP SearchFilterForUnconstrainedSearches::CreateFromStructuredData(
     Target &target, const StructuredData::Dictionary &data_dict,
     Status &error) {
@@ -403,24 +393,12 @@ lldb::SearchFilterSP SearchFilterForUnconstrainedSearches::DoCopyForBreakpoint(
   return std::make_shared<SearchFilterForUnconstrainedSearches>(*this);
 }
 
-//----------------------------------------------------------------------
 //  SearchFilterByModule:
 //  Selects a shared library matching a given file spec
-//----------------------------------------------------------------------
 
 SearchFilterByModule::SearchFilterByModule(const lldb::TargetSP &target_sp,
                                            const FileSpec &module)
     : SearchFilter(target_sp, FilterTy::ByModule), m_module_spec(module) {}
-
-SearchFilterByModule::SearchFilterByModule(const SearchFilterByModule &rhs) =
-    default;
-
-SearchFilterByModule &SearchFilterByModule::
-operator=(const SearchFilterByModule &rhs) {
-  m_target_sp = rhs.m_target_sp;
-  m_module_spec = rhs.m_module_spec;
-  return *this;
-}
 
 SearchFilterByModule::~SearchFilterByModule() = default;
 
@@ -533,10 +511,8 @@ StructuredData::ObjectSP SearchFilterByModule::SerializeToStructuredData() {
   return WrapOptionsDict(options_dict_sp);
 }
 
-//----------------------------------------------------------------------
 //  SearchFilterByModuleList:
 //  Selects a shared library matching a given file spec
-//----------------------------------------------------------------------
 
 SearchFilterByModuleList::SearchFilterByModuleList(
     const lldb::TargetSP &target_sp, const FileSpecList &module_list)
@@ -547,9 +523,6 @@ SearchFilterByModuleList::SearchFilterByModuleList(
     const lldb::TargetSP &target_sp, const FileSpecList &module_list,
     enum FilterTy filter_ty)
     : SearchFilter(target_sp, filter_ty), m_module_spec_list(module_list) {}
-
-SearchFilterByModuleList::SearchFilterByModuleList(
-    const SearchFilterByModuleList &rhs) = default;
 
 SearchFilterByModuleList &SearchFilterByModuleList::
 operator=(const SearchFilterByModuleList &rhs) {
@@ -667,7 +640,7 @@ SearchFilterSP SearchFilterByModuleList::CreateFromStructuredData(
             "SFBM::CFSD: filter module item %zu not a string.", i);
         return nullptr;
       }
-      modules.Append(FileSpec(module));
+      modules.EmplaceBack(module);
     }
   }
 
@@ -687,10 +660,8 @@ StructuredData::ObjectSP SearchFilterByModuleList::SerializeToStructuredData() {
   return WrapOptionsDict(options_dict_sp);
 }
 
-//----------------------------------------------------------------------
 //  SearchFilterByModuleListAndCU:
 //  Selects a shared library matching a given file spec
-//----------------------------------------------------------------------
 
 SearchFilterByModuleListAndCU::SearchFilterByModuleListAndCU(
     const lldb::TargetSP &target_sp, const FileSpecList &module_list,
@@ -732,7 +703,7 @@ lldb::SearchFilterSP SearchFilterByModuleListAndCU::CreateFromStructuredData(
             "SFBM::CFSD: filter module item %zu not a string.", i);
         return result_sp;
       }
-      modules.Append(FileSpec(module));
+      modules.EmplaceBack(module);
     }
   }
 
@@ -754,7 +725,7 @@ lldb::SearchFilterSP SearchFilterByModuleListAndCU::CreateFromStructuredData(
           "SFBM::CFSD: filter cu item %zu not a string.", i);
       return nullptr;
     }
-    cus.Append(FileSpec(cu));
+    cus.EmplaceBack(cu);
   }
 
   return std::make_shared<SearchFilterByModuleListAndCU>(

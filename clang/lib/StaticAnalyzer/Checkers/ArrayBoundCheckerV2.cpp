@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Taint.h"
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -24,6 +25,7 @@
 
 using namespace clang;
 using namespace ento;
+using namespace taint;
 
 namespace {
 class ArrayBoundCheckerV2 :
@@ -204,9 +206,9 @@ void ArrayBoundCheckerV2::checkLocation(SVal location, bool isLoad,
     // If we are under constrained and the index variables are tainted, report.
     if (state_exceedsUpperBound && state_withinUpperBound) {
       SVal ByteOffset = rawOffset.getByteOffset();
-      if (state->isTainted(ByteOffset)) {
+      if (isTainted(state, ByteOffset)) {
         reportOOB(checkerContext, state_exceedsUpperBound, OOB_Tainted,
-                  llvm::make_unique<TaintBugVisitor>(ByteOffset));
+                  std::make_unique<TaintBugVisitor>(ByteOffset));
         return;
       }
     } else if (state_exceedsUpperBound) {
@@ -254,7 +256,7 @@ void ArrayBoundCheckerV2::reportOOB(
     break;
   }
 
-  auto BR = llvm::make_unique<BugReport>(*BT, os.str(), errorNode);
+  auto BR = std::make_unique<PathSensitiveBugReport>(*BT, os.str(), errorNode);
   BR->addVisitor(std::move(Visitor));
   checkerContext.emitReport(std::move(BR));
 }

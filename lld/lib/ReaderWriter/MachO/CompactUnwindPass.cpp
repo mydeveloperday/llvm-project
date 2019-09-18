@@ -387,12 +387,9 @@ private:
 
       // Gather the personality functions now, so that they're in deterministic
       // order (derived from the DefinedAtom order).
-      if (unwindEntry.personalityFunction) {
-        auto pFunc = std::find(personalities.begin(), personalities.end(),
-                               unwindEntry.personalityFunction);
-        if (pFunc == personalities.end())
-          personalities.push_back(unwindEntry.personalityFunction);
-      }
+      if (unwindEntry.personalityFunction &&
+          !llvm::count(personalities, unwindEntry.personalityFunction))
+        personalities.push_back(unwindEntry.personalityFunction);
     }
   }
 
@@ -551,8 +548,7 @@ private:
       }
     }
 
-    auto personality = std::find(personalities.begin(), personalities.end(),
-                                 entry.personalityFunction);
+    auto personality = llvm::find(personalities, entry.personalityFunction);
     uint32_t personalityIdx = personality == personalities.end()
                                   ? 0
                                   : personality - personalities.begin() + 1;
@@ -577,7 +573,7 @@ private:
 
 void addCompactUnwindPass(PassManager &pm, const MachOLinkingContext &ctx) {
   assert(ctx.needsCompactUnwindPass());
-  pm.add(llvm::make_unique<CompactUnwindPass>(ctx));
+  pm.add(std::make_unique<CompactUnwindPass>(ctx));
 }
 
 } // end namesapce mach_o

@@ -131,7 +131,6 @@ defm : SLMWriteResPair<WriteJump,   [SLM_IEC_RSV1],  1>;
 defm : SLMWriteResPair<WriteCRC32,  [SLM_IEC_RSV1],  3>;
 
 defm : SLMWriteResPair<WriteCMOV,  [SLM_IEC_RSV01], 2, [2]>;
-defm : SLMWriteResPair<WriteCMOV2, [SLM_IEC_RSV01], 2, [2]>;
 defm : X86WriteRes<WriteFCMOV, [SLM_FPC_RSV1], 3, [1], 1>; // x87 conditional move.
 def  : WriteRes<WriteSETCC, [SLM_IEC_RSV01]>;
 def  : WriteRes<WriteSETCCStore, [SLM_IEC_RSV01, SLM_MEC_RSV]> {
@@ -187,8 +186,12 @@ def  : WriteRes<WriteFStoreY,       [SLM_MEC_RSV]>;
 def  : WriteRes<WriteFStoreNT,      [SLM_MEC_RSV]>;
 def  : WriteRes<WriteFStoreNTX,     [SLM_MEC_RSV]>;
 def  : WriteRes<WriteFStoreNTY,     [SLM_MEC_RSV]>;
-def  : WriteRes<WriteFMaskedStore,  [SLM_MEC_RSV]>;
-def  : WriteRes<WriteFMaskedStoreY, [SLM_MEC_RSV]>;
+
+def  : WriteRes<WriteFMaskedStore32,    [SLM_MEC_RSV]>;
+def  : WriteRes<WriteFMaskedStore32Y,   [SLM_MEC_RSV]>;
+def  : WriteRes<WriteFMaskedStore64,    [SLM_MEC_RSV]>;
+def  : WriteRes<WriteFMaskedStore64Y,   [SLM_MEC_RSV]>;
+
 def  : WriteRes<WriteFMove,         [SLM_FPC_RSV01]>;
 def  : WriteRes<WriteFMoveX,        [SLM_FPC_RSV01]>;
 def  : WriteRes<WriteFMoveY,        [SLM_FPC_RSV01]>;

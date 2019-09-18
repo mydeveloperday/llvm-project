@@ -66,18 +66,19 @@ OPTIONS:
 const char ArHelp[] = R"(
 OVERVIEW: LLVM Archiver
 
-USAGE: llvm-ar [options] [-]<operation>[modifiers] [relpos] <archive> [files]
+USAGE: llvm-ar [options] [-]<operation>[modifiers] [relpos] [count] <archive> [files]
        llvm-ar -M [<mri-script]
 
 OPTIONS:
-  --format              - Archive format to create
+  --format              - archive format to create
     =default            -   default
     =gnu                -   gnu
     =darwin             -   darwin
     =bsd                -   bsd
-  --plugin=<string>     - Ignored for compatibility
-  --help                - Display available options
-  --version             - Display the version of this program
+  --plugin=<string>     - ignored for compatibility
+  -h --help             - display this help and exit
+  --version             - print the version and exit
+  @<file>               - read options from <file>
 
 OPERATIONS:
   d - delete [files] from the archive
@@ -97,6 +98,7 @@ MODIFIERS:
   [i] - put [files] before [relpos] (same as [b])
   [l] - ignored for compatibility
   [L] - add archive's contents
+  [N] - use instance [count] of name
   [o] - preserve original dates
   [P] - use full names when matching (implied for thin archives)
   [s] - create an archive index (cf. ranlib)
@@ -116,7 +118,7 @@ void printHelpMessage() {
 
 // Show the error message and exit.
 LLVM_ATTRIBUTE_NORETURN static void fail(Twine Error) {
-  WithColor::error(errs(), ToolName) << Error << ".\n";
+  WithColor::error(errs(), ToolName) << Error << "\n";
   printHelpMessage();
   exit(1);
 }
@@ -187,6 +189,11 @@ static bool AddLibrary = false;      ///< 'L' modifier
 // one variable.
 static std::string RelPos;
 
+// Count parameter for 'N' modifier. This variable specifies which file should
+// match for extract/delete operations when there are multiple matches. This is
+// 1-indexed. A value of 0 is invalid, and implies 'N' is not used.
+static int CountParam = 0;
+
 // This variable holds the name of the archive file as given on the
 // command line.
 static std::string ArchiveName;
@@ -202,15 +209,28 @@ static BumpPtrAllocator Alloc;
 // associated with a, b, and i modifiers
 static void getRelPos() {
   if (PositionalArgs.empty())
-    fail("Expected [relpos] for a, b, or i modifier");
+    fail("expected [relpos] for 'a', 'b', or 'i' modifier");
   RelPos = PositionalArgs[0];
+  PositionalArgs.erase(PositionalArgs.begin());
+}
+
+// Extract the parameter from the command line for the [count] argument
+// associated with the N modifier
+static void getCountParam() {
+  if (PositionalArgs.empty())
+    fail("expected [count] for 'N' modifier");
+  auto CountParamArg = StringRef(PositionalArgs[0]);
+  if (CountParamArg.getAsInteger(10, CountParam))
+    fail("value for [count] must be numeric, got: " + CountParamArg);
+  if (CountParam < 1)
+    fail("value for [count] must be positive, got: " + CountParamArg);
   PositionalArgs.erase(PositionalArgs.begin());
 }
 
 // Get the archive file name from the command line
 static void getArchive() {
   if (PositionalArgs.empty())
-    fail("An archive name must be specified");
+    fail("an archive name must be specified");
   ArchiveName = PositionalArgs[0];
   PositionalArgs.erase(PositionalArgs.begin());
 }
@@ -226,12 +246,12 @@ std::vector<std::unique_ptr<object::Archive>> Archives;
 
 static object::Archive &readLibrary(const Twine &Library) {
   auto BufOrErr = MemoryBuffer::getFile(Library, -1, false);
-  failIfError(BufOrErr.getError(), "Could not open library " + Library);
+  failIfError(BufOrErr.getError(), "could not open library " + Library);
   ArchiveBuffers.push_back(std::move(*BufOrErr));
   auto LibOrErr =
       object::Archive::create(ArchiveBuffers.back()->getMemBufferRef());
   failIfError(errorToErrorCode(LibOrErr.takeError()),
-              "Could not parse library");
+              "could not parse library");
   Archives.push_back(std::move(*LibOrErr));
   return *Archives.back();
 }
@@ -244,7 +264,7 @@ static void runMRIScript();
 static ArchiveOperation parseCommandLine() {
   if (MRI) {
     if (!PositionalArgs.empty() || !Options.empty())
-      fail("Cannot mix -M and other options");
+      fail("cannot mix -M and other options");
     runMRIScript();
   }
 
@@ -336,6 +356,9 @@ static ArchiveOperation parseCommandLine() {
     case 'U':
       Deterministic = false;
       break;
+    case 'N':
+      getCountParam();
+      break;
     case 'T':
       Thin = true;
       // Thin archives store path names, so P should be forced.
@@ -360,28 +383,31 @@ static ArchiveOperation parseCommandLine() {
     NumOperations = 1;
     Operation = CreateSymTab;
     if (!Members.empty())
-      fail("The s operation takes only an archive as argument");
+      fail("the 's' operation takes only an archive as argument");
   }
 
   // Perform various checks on the operation/modifier specification
   // to make sure we are dealing with a legal request.
   if (NumOperations == 0)
-    fail("You must specify at least one of the operations");
+    fail("you must specify at least one of the operations");
   if (NumOperations > 1)
-    fail("Only one operation may be specified");
+    fail("only one operation may be specified");
   if (NumPositional > 1)
-    fail("You may only specify one of a, b, and i modifiers");
-  if (AddAfter || AddBefore) {
+    fail("you may only specify one of 'a', 'b', and 'i' modifiers");
+  if (AddAfter || AddBefore)
     if (Operation != Move && Operation != ReplaceOrInsert)
-      fail("The 'a', 'b' and 'i' modifiers can only be specified with "
+      fail("the 'a', 'b' and 'i' modifiers can only be specified with "
            "the 'm' or 'r' operations");
-  }
+  if (CountParam)
+    if (Operation != Extract && Operation != Delete)
+      fail("the 'N' modifier can only be specified with the 'x' or 'd' "
+           "operations");
   if (OriginalDates && Operation != Extract)
-    fail("The 'o' modifier is only applicable to the 'x' operation");
+    fail("the 'o' modifier is only applicable to the 'x' operation");
   if (OnlyUpdate && Operation != ReplaceOrInsert)
-    fail("The 'u' modifier is only applicable to the 'r' operation");
+    fail("the 'u' modifier is only applicable to the 'r' operation");
   if (AddLibrary && Operation != QuickAppend)
-    fail("The 'L' modifier is only applicable to the 'q' operation");
+    fail("the 'L' modifier is only applicable to the 'q' operation");
 
   // Return the parsed operation to the caller
   return Operation;
@@ -439,15 +465,18 @@ static void doDisplayTable(StringRef Name, const object::Archive::Child &C) {
   }
 
   if (C.getParent()->isThin()) {
-    StringRef ParentDir = sys::path::parent_path(ArchiveName);
-    if (!ParentDir.empty())
-      outs() << ParentDir << '/';
+    if (!sys::path::is_absolute(Name)) {
+      StringRef ParentDir = sys::path::parent_path(ArchiveName);
+      if (!ParentDir.empty())
+        outs() << sys::path::convert_to_slash(ParentDir) << '/';
+    }
   }
   outs() << Name << "\n";
 }
 
-static StringRef normalizePath(StringRef Path) {
-  return CompareFullPath ? Path : sys::path::filename(Path);
+static std::string normalizePath(StringRef Path) {
+  return CompareFullPath ? sys::path::convert_to_slash(Path)
+                         : std::string(sys::path::filename(Path));
 }
 
 // Implement the 'x' operation. This function extracts files back to the file
@@ -461,7 +490,7 @@ static void doExtract(StringRef Name, const object::Archive::Child &C) {
   int FD;
   failIfError(sys::fs::openFileForWrite(sys::path::filename(Name), FD,
                                         sys::fs::CD_CreateAlways,
-                                        sys::fs::F_None, Mode),
+                                        sys::fs::OF_None, Mode),
               Name);
 
   {
@@ -513,6 +542,7 @@ static void performReadOperation(ArchiveOperation Operation,
     fail("extracting from a thin archive is not supported");
 
   bool Filter = !Members.empty();
+  StringMap<int> MemberCount;
   {
     Error Err = Error::success();
     for (auto &C : OldArchive->children(Err)) {
@@ -525,6 +555,8 @@ static void performReadOperation(ArchiveOperation Operation,
           return Name == normalizePath(Path);
         });
         if (I == Members.end())
+          continue;
+        if (CountParam && ++MemberCount[Name] != CountParam)
           continue;
         Members.erase(I);
       }
@@ -557,7 +589,7 @@ static void addChildMember(std::vector<NewArchiveMember> &Members,
                            const object::Archive::Child &M,
                            bool FlattenArchive = false) {
   if (Thin && !M.getParent()->isThin())
-    fail("Cannot convert a regular archive to a thin one");
+    fail("cannot convert a regular archive to a thin one");
   Expected<NewArchiveMember> NMOrErr =
       NewArchiveMember::getOldMember(M, Deterministic);
   failIfError(NMOrErr.takeError());
@@ -565,10 +597,18 @@ static void addChildMember(std::vector<NewArchiveMember> &Members,
   // the archive it's in, so the file resolves correctly.
   if (Thin && FlattenArchive) {
     StringSaver Saver(Alloc);
-    Expected<std::string> FileNameOrErr = M.getFullName();
+    Expected<std::string> FileNameOrErr = M.getName();
     failIfError(FileNameOrErr.takeError());
-    NMOrErr->MemberName =
-        Saver.save(computeArchiveRelativePath(ArchiveName, *FileNameOrErr));
+    if (sys::path::is_absolute(*FileNameOrErr)) {
+      NMOrErr->MemberName = Saver.save(sys::path::convert_to_slash(*FileNameOrErr));
+    } else {
+      FileNameOrErr = M.getFullName();
+      failIfError(FileNameOrErr.takeError());
+      Expected<std::string> PathOrErr =
+          computeArchiveRelativePath(ArchiveName, *FileNameOrErr);
+      NMOrErr->MemberName = Saver.save(
+          PathOrErr ? *PathOrErr : sys::path::convert_to_slash(*FileNameOrErr));
+    }
   }
   if (FlattenArchive &&
       identify_magic(NMOrErr->Buf->getBuffer()) == file_magic::archive) {
@@ -597,9 +637,19 @@ static void addMember(std::vector<NewArchiveMember> &Members,
   // For regular archives, use the basename of the object path for the member
   // name. For thin archives, use the full relative paths so the file resolves
   // correctly.
-  NMOrErr->MemberName =
-      Thin ? Saver.save(computeArchiveRelativePath(ArchiveName, FileName))
-           : sys::path::filename(NMOrErr->MemberName);
+  if (!Thin) {
+    NMOrErr->MemberName = sys::path::filename(NMOrErr->MemberName);
+  } else {
+    if (sys::path::is_absolute(FileName))
+      NMOrErr->MemberName = Saver.save(sys::path::convert_to_slash(FileName));
+    else {
+      Expected<std::string> PathOrErr =
+          computeArchiveRelativePath(ArchiveName, FileName);
+      NMOrErr->MemberName = Saver.save(
+          PathOrErr ? *PathOrErr : sys::path::convert_to_slash(FileName));
+    }
+  }
+
   if (FlattenArchive &&
       identify_magic(NMOrErr->Buf->getBuffer()) == file_magic::archive) {
     object::Archive &Lib = readLibrary(FileName);
@@ -627,10 +677,10 @@ enum InsertAction {
 static InsertAction computeInsertAction(ArchiveOperation Operation,
                                         const object::Archive::Child &Member,
                                         StringRef Name,
-                                        std::vector<StringRef>::iterator &Pos) {
+                                        std::vector<StringRef>::iterator &Pos,
+                                        StringMap<int> &MemberCount) {
   if (Operation == QuickAppend || Members.empty())
     return IA_AddOldMember;
-
   auto MI = find_if(
       Members, [Name](StringRef Path) { return Name == normalizePath(Path); });
 
@@ -639,16 +689,18 @@ static InsertAction computeInsertAction(ArchiveOperation Operation,
 
   Pos = MI;
 
-  if (Operation == Delete)
+  if (Operation == Delete) {
+    if (CountParam && ++MemberCount[Name] != CountParam)
+      return IA_AddOldMember;
     return IA_Delete;
+  }
 
   if (Operation == Move)
     return IA_MoveOldMember;
 
   if (Operation == ReplaceOrInsert) {
-    StringRef PosName = normalizePath(RelPos);
     if (!OnlyUpdate) {
-      if (PosName.empty())
+      if (RelPos.empty())
         return IA_AddNewMember;
       return IA_MoveNewMember;
     }
@@ -660,12 +712,12 @@ static InsertAction computeInsertAction(ArchiveOperation Operation,
     auto ModTimeOrErr = Member.getLastModified();
     failIfError(ModTimeOrErr.takeError());
     if (Status.getLastModificationTime() < ModTimeOrErr.get()) {
-      if (PosName.empty())
+      if (RelPos.empty())
         return IA_AddOldMember;
       return IA_MoveOldMember;
     }
 
-    if (PosName.empty())
+    if (RelPos.empty())
       return IA_AddNewMember;
     return IA_MoveNewMember;
   }
@@ -680,9 +732,10 @@ computeNewArchiveMembers(ArchiveOperation Operation,
   std::vector<NewArchiveMember> Ret;
   std::vector<NewArchiveMember> Moved;
   int InsertPos = -1;
-  StringRef PosName = normalizePath(RelPos);
   if (OldArchive) {
+    std::string PosName = normalizePath(RelPos);
     Error Err = Error::success();
+    StringMap<int> MemberCount;
     for (auto &Child : OldArchive->children(Err)) {
       int Pos = Ret.size();
       Expected<StringRef> NameOrErr = Child.getName();
@@ -698,7 +751,7 @@ computeNewArchiveMembers(ArchiveOperation Operation,
 
       std::vector<StringRef>::iterator MemberI = Members.end();
       InsertAction Action =
-          computeInsertAction(Operation, Child, Name, MemberI);
+          computeInsertAction(Operation, Child, Name, MemberI, MemberCount);
       switch (Action) {
       case IA_AddOldMember:
         addChildMember(Ret, Child, /*FlattenArchive=*/Thin);
@@ -715,7 +768,12 @@ computeNewArchiveMembers(ArchiveOperation Operation,
         addMember(Moved, *MemberI);
         break;
       }
-      if (MemberI != Members.end())
+      // When processing elements with the count param, we need to preserve the
+      // full members list when iterating over all archive members. For
+      // instance, "llvm-ar dN 2 archive.a member.o" should delete the second
+      // file named member.o it sees; we are not done with member.o the first
+      // time we see it in the archive.
+      if (MemberI != Members.end() && !CountParam)
         Members.erase(MemberI);
     }
     failIfError(std::move(Err));
@@ -725,7 +783,7 @@ computeNewArchiveMembers(ArchiveOperation Operation,
     return Ret;
 
   if (!RelPos.empty() && InsertPos == -1)
-    fail("Insertion point not found");
+    fail("insertion point not found");
 
   if (RelPos.empty())
     InsertPos = Ret.size();
@@ -801,12 +859,12 @@ static void performWriteOperation(ArchiveOperation Operation,
     break;
   case BSD:
     if (Thin)
-      fail("Only the gnu format has a thin mode");
+      fail("only the gnu format has a thin mode");
     Kind = object::Archive::K_BSD;
     break;
   case DARWIN:
     if (Thin)
-      fail("Only the gnu format has a thin mode");
+      fail("only the gnu format has a thin mode");
     Kind = object::Archive::K_DARWIN;
     break;
   case Unknown:
@@ -864,14 +922,13 @@ static int performOperation(ArchiveOperation Operation,
       MemoryBuffer::getFile(ArchiveName, -1, false);
   std::error_code EC = Buf.getError();
   if (EC && EC != errc::no_such_file_or_directory)
-    fail("error opening '" + ArchiveName + "': " + EC.message() + "!");
+    fail("error opening '" + ArchiveName + "': " + EC.message());
 
   if (!EC) {
     Error Err = Error::success();
     object::Archive Archive(Buf.get()->getMemBufferRef(), Err);
     EC = errorToErrorCode(std::move(Err));
-    failIfError(EC,
-                "error loading '" + ArchiveName + "': " + EC.message() + "!");
+    failIfError(EC, "error loading '" + ArchiveName + "': " + EC.message());
     if (Archive.isThin())
       CompareFullPath = true;
     performOperation(Operation, &Archive, std::move(Buf.get()), NewMembers);
@@ -895,7 +952,7 @@ static int performOperation(ArchiveOperation Operation,
 }
 
 static void runMRIScript() {
-  enum class MRICommand { AddLib, AddMod, Create, Delete, Save, End, Invalid };
+  enum class MRICommand { AddLib, AddMod, Create, CreateThin, Delete, Save, End, Invalid };
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf = MemoryBuffer::getSTDIN();
   failIfError(Buf.getError());
@@ -919,6 +976,7 @@ static void runMRIScript() {
                        .Case("addlib", MRICommand::AddLib)
                        .Case("addmod", MRICommand::AddMod)
                        .Case("create", MRICommand::Create)
+                       .Case("createthin", MRICommand::CreateThin)
                        .Case("delete", MRICommand::Delete)
                        .Case("save", MRICommand::Save)
                        .Case("end", MRICommand::End)
@@ -938,16 +996,19 @@ static void runMRIScript() {
     case MRICommand::AddMod:
       addMember(NewMembers, Rest);
       break;
+    case MRICommand::CreateThin:
+      Thin = true;
+      LLVM_FALLTHROUGH;
     case MRICommand::Create:
       Create = true;
       if (!ArchiveName.empty())
-        fail("Editing multiple archives not supported");
+        fail("editing multiple archives not supported");
       if (Saved)
-        fail("File already saved");
+        fail("file already saved");
       ArchiveName = Rest;
       break;
     case MRICommand::Delete: {
-      StringRef Name = normalizePath(Rest);
+      std::string Name = normalizePath(Rest);
       llvm::erase_if(NewMembers,
                      [=](NewArchiveMember &M) { return M.MemberName == Name; });
       break;
@@ -958,7 +1019,7 @@ static void runMRIScript() {
     case MRICommand::End:
       break;
     case MRICommand::Invalid:
-      fail("Unknown command: " + CommandStr);
+      fail("unknown command: " + CommandStr);
     }
   }
 
@@ -969,7 +1030,7 @@ static void runMRIScript() {
 }
 
 static bool handleGenericOption(StringRef arg) {
-  if (arg == "-help" || arg == "--help") {
+  if (arg == "h" || arg.startswith("-h") || arg == "--help") {
     printHelpMessage();
     return true;
   }
@@ -1046,7 +1107,7 @@ static int ranlib_main(int argc, char **argv) {
       return 0;
     } else {
       if (ArchiveSpecified)
-        fail("Exactly one archive should be specified");
+        fail("exactly one archive should be specified");
       ArchiveSpecified = true;
       ArchiveName = argv[i];
     }
@@ -1074,5 +1135,5 @@ int main(int argc, char **argv) {
 
   if (Stem.contains_lower("ar"))
     return ar_main(argc, argv);
-  fail("Not ranlib, ar, lib or dlltool!");
+  fail("not ranlib, ar, lib or dlltool");
 }

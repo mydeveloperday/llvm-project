@@ -22,6 +22,7 @@
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
@@ -208,6 +209,8 @@ bool LPPassManager::runOnFunction(Function &F) {
     // Run all passes on the current Loop.
     for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
       LoopPass *P = getContainedPass(Index);
+
+      llvm::TimeTraceScope LoopPassScope("RunLoopPass", P->getPassName());
 
       dumpPassInfo(P, EXECUTION_MSG, ON_LOOP_MSG,
                    CurrentLoop->getHeader()->getName());
@@ -396,7 +399,7 @@ bool LoopPass::skipLoop(const Loop *L) const {
   if (Gate.isEnabled() && !Gate.shouldRunPass(this, getDescription(*L)))
     return true;
   // Check for the OptimizeNone attribute.
-  if (F->hasFnAttribute(Attribute::OptimizeNone)) {
+  if (F->hasOptNone()) {
     // FIXME: Report this to dbgs() only once per function.
     LLVM_DEBUG(dbgs() << "Skipping pass '" << getPassName() << "' in function "
                       << F->getName() << "\n");

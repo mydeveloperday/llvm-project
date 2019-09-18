@@ -1,4 +1,4 @@
-//===--- BaremMetal.cpp - Bare Metal ToolChain ------------------*- C++ -*-===//
+//===-- BareMetal.cpp - Bare Metal ToolChain --------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -191,7 +191,7 @@ void baremetal::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
 
-  C.addCommand(llvm::make_unique<Command>(JA, *this,
+  C.addCommand(std::make_unique<Command>(JA, *this,
                                           Args.MakeArgString(TC.GetLinkerPath()),
                                           CmdArgs, Inputs));
 }

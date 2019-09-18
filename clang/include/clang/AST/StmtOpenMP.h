@@ -87,6 +87,63 @@ protected:
   }
 
 public:
+  /// Iterates over expressions/statements used in the construct.
+  class used_clauses_child_iterator
+      : public llvm::iterator_adaptor_base<
+            used_clauses_child_iterator, ArrayRef<OMPClause *>::iterator,
+            std::forward_iterator_tag, Stmt *, ptrdiff_t, Stmt *, Stmt *> {
+    ArrayRef<OMPClause *>::iterator End;
+    OMPClause::child_iterator ChildI, ChildEnd;
+
+    void MoveToNext() {
+      if (ChildI != ChildEnd)
+        return;
+      while (this->I != End) {
+        ++this->I;
+        if (this->I != End) {
+          ChildI = (*this->I)->used_children().begin();
+          ChildEnd = (*this->I)->used_children().end();
+          if (ChildI != ChildEnd)
+            return;
+        }
+      }
+    }
+
+  public:
+    explicit used_clauses_child_iterator(ArrayRef<OMPClause *> Clauses)
+        : used_clauses_child_iterator::iterator_adaptor_base(Clauses.begin()),
+          End(Clauses.end()) {
+      if (this->I != End) {
+        ChildI = (*this->I)->used_children().begin();
+        ChildEnd = (*this->I)->used_children().end();
+        MoveToNext();
+      }
+    }
+    Stmt *operator*() const { return *ChildI; }
+    Stmt *operator->() const { return **this; }
+
+    used_clauses_child_iterator &operator++() {
+      ++ChildI;
+      if (ChildI != ChildEnd)
+        return *this;
+      if (this->I != End) {
+        ++this->I;
+        if (this->I != End) {
+          ChildI = (*this->I)->used_children().begin();
+          ChildEnd = (*this->I)->used_children().end();
+        }
+      }
+      MoveToNext();
+      return *this;
+    }
+  };
+
+  static llvm::iterator_range<used_clauses_child_iterator>
+  used_clauses_children(ArrayRef<OMPClause *> Clauses) {
+    return {used_clauses_child_iterator(Clauses),
+            used_clauses_child_iterator(llvm::makeArrayRef(Clauses.end(), 0))};
+  }
+
   /// Iterates over a filtered subrange of clauses applied to a
   /// directive.
   ///
@@ -256,10 +313,34 @@ public:
     return child_range(ChildStorage, ChildStorage + 1);
   }
 
+  const_child_range children() const {
+    if (!hasAssociatedStmt())
+      return const_child_range(const_child_iterator(), const_child_iterator());
+    Stmt **ChildStorage = reinterpret_cast<Stmt **>(
+        const_cast<OMPExecutableDirective *>(this)->getClauses().end());
+    return const_child_range(ChildStorage, ChildStorage + 1);
+  }
+
   ArrayRef<OMPClause *> clauses() { return getClauses(); }
 
   ArrayRef<OMPClause *> clauses() const {
     return const_cast<OMPExecutableDirective *>(this)->getClauses();
+  }
+
+  /// Returns whether or not this is a Standalone directive.
+  ///
+  /// Stand-alone directives are executable directives
+  /// that have no associated user code.
+  bool isStandaloneDirective() const;
+
+  /// Returns the AST node representing OpenMP structured-block of this
+  /// OpenMP executable directive,
+  /// Prerequisite: Executable Directive must not be Standalone directive.
+  const Stmt *getStructuredBlock() const;
+
+  Stmt *getStructuredBlock() {
+    return const_cast<Stmt *>(
+        const_cast<const OMPExecutableDirective *>(this)->getStructuredBlock());
   }
 };
 
@@ -367,7 +448,8 @@ class OMPLoopDirective : public OMPExecutableDirective {
     PreInitsOffset = 8,
     // The '...End' enumerators do not correspond to child expressions - they
     // specify the offset to the end (and start of the following counters/
-    // updates/finals arrays).
+    // updates/finals/dependent_counters/dependent_inits/finals_conditions
+    // arrays).
     DefaultEnd = 9,
     // The following 8 exprs are used by worksharing and distribute loops only.
     IsLastIterVariableOffset = 9,
@@ -393,7 +475,8 @@ class OMPLoopDirective : public OMPExecutableDirective {
     CombinedNextUpperBoundOffset = 27,
     CombinedDistConditionOffset = 28,
     CombinedParForInDistConditionOffset = 29,
-    // Offset to the end (and start of the following counters/updates/finals
+    // Offset to the end (and start of the following
+    // counters/updates/finals/dependent_counters/dependent_inits/finals_conditions
     // arrays) for combined distribute loop directives.
     CombinedDistributeEnd = 30,
   };
@@ -436,6 +519,30 @@ class OMPLoopDirective : public OMPExecutableDirective {
     return MutableArrayRef<Expr *>(Storage, CollapsedNum);
   }
 
+  /// Get the dependent counters storage.
+  MutableArrayRef<Expr *> getDependentCounters() {
+    Expr **Storage = reinterpret_cast<Expr **>(
+        &*std::next(child_begin(),
+                    getArraysOffset(getDirectiveKind()) + 5 * CollapsedNum));
+    return MutableArrayRef<Expr *>(Storage, CollapsedNum);
+  }
+
+  /// Get the dependent inits storage.
+  MutableArrayRef<Expr *> getDependentInits() {
+    Expr **Storage = reinterpret_cast<Expr **>(
+        &*std::next(child_begin(),
+                    getArraysOffset(getDirectiveKind()) + 6 * CollapsedNum));
+    return MutableArrayRef<Expr *>(Storage, CollapsedNum);
+  }
+
+  /// Get the finals conditions storage.
+  MutableArrayRef<Expr *> getFinalsConditions() {
+    Expr **Storage = reinterpret_cast<Expr **>(
+        &*std::next(child_begin(),
+                    getArraysOffset(getDirectiveKind()) + 7 * CollapsedNum));
+    return MutableArrayRef<Expr *>(Storage, CollapsedNum);
+  }
+
 protected:
   /// Build instance of loop directive of class \a Kind.
   ///
@@ -470,9 +577,10 @@ protected:
   /// Children number.
   static unsigned numLoopChildren(unsigned CollapsedNum,
                                   OpenMPDirectiveKind Kind) {
-    return getArraysOffset(Kind) + 5 * CollapsedNum; // Counters,
-                                                     // PrivateCounters, Inits,
-                                                     // Updates and Finals
+    return getArraysOffset(Kind) +
+           8 * CollapsedNum; // Counters, PrivateCounters, Inits,
+                             // Updates, Finals, DependentCounters,
+                             // DependentInits, FinalsConditions.
   }
 
   void setIterationVariable(Expr *IV) {
@@ -622,6 +730,9 @@ protected:
   void setInits(ArrayRef<Expr *> A);
   void setUpdates(ArrayRef<Expr *> A);
   void setFinals(ArrayRef<Expr *> A);
+  void setDependentCounters(ArrayRef<Expr *> A);
+  void setDependentInits(ArrayRef<Expr *> A);
+  void setFinalsConditions(ArrayRef<Expr *> A);
 
 public:
   /// The expressions built to support OpenMP loops in combined/composite
@@ -717,6 +828,15 @@ public:
     SmallVector<Expr *, 4> Updates;
     /// Final loop counter values for GodeGen.
     SmallVector<Expr *, 4> Finals;
+    /// List of counters required for the generation of the non-rectangular
+    /// loops.
+    SmallVector<Expr *, 4> DependentCounters;
+    /// List of initializers required for the generation of the non-rectangular
+    /// loops.
+    SmallVector<Expr *, 4> DependentInits;
+    /// List of final conditions required for the generation of the
+    /// non-rectangular loops.
+    SmallVector<Expr *, 4> FinalsConditions;
     /// Init statement for all captured expressions.
     Stmt *PreInits;
 
@@ -732,7 +852,9 @@ public:
     }
 
     /// Initialize all the fields to null.
-    /// \param Size Number of elements in the counters/finals/updates arrays.
+    /// \param Size Number of elements in the
+    /// counters/finals/updates/dependent_counters/dependent_inits/finals_conditions
+    /// arrays.
     void clear(unsigned Size) {
       IterationVarRef = nullptr;
       LastIteration = nullptr;
@@ -758,12 +880,18 @@ public:
       Inits.resize(Size);
       Updates.resize(Size);
       Finals.resize(Size);
+      DependentCounters.resize(Size);
+      DependentInits.resize(Size);
+      FinalsConditions.resize(Size);
       for (unsigned i = 0; i < Size; ++i) {
         Counters[i] = nullptr;
         PrivateCounters[i] = nullptr;
         Inits[i] = nullptr;
         Updates[i] = nullptr;
         Finals[i] = nullptr;
+        DependentCounters[i] = nullptr;
+        DependentInits[i] = nullptr;
+        FinalsConditions[i] = nullptr;
       }
       PreInits = nullptr;
       DistCombinedFields.LB = nullptr;
@@ -995,6 +1123,24 @@ public:
 
   ArrayRef<Expr *> finals() const {
     return const_cast<OMPLoopDirective *>(this)->getFinals();
+  }
+
+  ArrayRef<Expr *> dependent_counters() { return getDependentCounters(); }
+
+  ArrayRef<Expr *> dependent_counters() const {
+    return const_cast<OMPLoopDirective *>(this)->getDependentCounters();
+  }
+
+  ArrayRef<Expr *> dependent_inits() { return getDependentInits(); }
+
+  ArrayRef<Expr *> dependent_inits() const {
+    return const_cast<OMPLoopDirective *>(this)->getDependentInits();
+  }
+
+  ArrayRef<Expr *> finals_conditions() { return getFinalsConditions(); }
+
+  ArrayRef<Expr *> finals_conditions() const {
+    return const_cast<OMPLoopDirective *>(this)->getFinalsConditions();
   }
 
   static bool classof(const Stmt *T) {

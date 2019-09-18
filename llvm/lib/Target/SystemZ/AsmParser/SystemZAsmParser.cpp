@@ -6,8 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "InstPrinter/SystemZInstPrinter.h"
+#include "MCTargetDesc/SystemZInstPrinter.h"
 #include "MCTargetDesc/SystemZMCTargetDesc.h"
+#include "TargetInfo/SystemZTargetInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -154,11 +155,11 @@ public:
   // Create particular kinds of operand.
   static std::unique_ptr<SystemZOperand> createInvalid(SMLoc StartLoc,
                                                        SMLoc EndLoc) {
-    return make_unique<SystemZOperand>(KindInvalid, StartLoc, EndLoc);
+    return std::make_unique<SystemZOperand>(KindInvalid, StartLoc, EndLoc);
   }
 
   static std::unique_ptr<SystemZOperand> createToken(StringRef Str, SMLoc Loc) {
-    auto Op = make_unique<SystemZOperand>(KindToken, Loc, Loc);
+    auto Op = std::make_unique<SystemZOperand>(KindToken, Loc, Loc);
     Op->Token.Data = Str.data();
     Op->Token.Length = Str.size();
     return Op;
@@ -166,7 +167,7 @@ public:
 
   static std::unique_ptr<SystemZOperand>
   createReg(RegisterKind Kind, unsigned Num, SMLoc StartLoc, SMLoc EndLoc) {
-    auto Op = make_unique<SystemZOperand>(KindReg, StartLoc, EndLoc);
+    auto Op = std::make_unique<SystemZOperand>(KindReg, StartLoc, EndLoc);
     Op->Reg.Kind = Kind;
     Op->Reg.Num = Num;
     return Op;
@@ -174,7 +175,7 @@ public:
 
   static std::unique_ptr<SystemZOperand>
   createImm(const MCExpr *Expr, SMLoc StartLoc, SMLoc EndLoc) {
-    auto Op = make_unique<SystemZOperand>(KindImm, StartLoc, EndLoc);
+    auto Op = std::make_unique<SystemZOperand>(KindImm, StartLoc, EndLoc);
     Op->Imm = Expr;
     return Op;
   }
@@ -183,7 +184,7 @@ public:
   createMem(MemoryKind MemKind, RegisterKind RegKind, unsigned Base,
             const MCExpr *Disp, unsigned Index, const MCExpr *LengthImm,
             unsigned LengthReg, SMLoc StartLoc, SMLoc EndLoc) {
-    auto Op = make_unique<SystemZOperand>(KindMem, StartLoc, EndLoc);
+    auto Op = std::make_unique<SystemZOperand>(KindMem, StartLoc, EndLoc);
     Op->Mem.MemKind = MemKind;
     Op->Mem.RegKind = RegKind;
     Op->Mem.Base = Base;
@@ -199,7 +200,7 @@ public:
   static std::unique_ptr<SystemZOperand>
   createImmTLS(const MCExpr *Imm, const MCExpr *Sym,
                SMLoc StartLoc, SMLoc EndLoc) {
-    auto Op = make_unique<SystemZOperand>(KindImmTLS, StartLoc, EndLoc);
+    auto Op = std::make_unique<SystemZOperand>(KindImmTLS, StartLoc, EndLoc);
     Op->ImmTLS.Imm = Imm;
     Op->ImmTLS.Sym = Sym;
     return Op;
@@ -650,7 +651,6 @@ static void printMCExpr(const MCExpr *E, raw_ostream &OS) {
 
 void SystemZOperand::print(raw_ostream &OS) const {
   switch (Kind) {
-    break;
   case KindToken:
     OS << "Token:" << getToken();
     break;
@@ -1180,8 +1180,10 @@ bool SystemZAsmParser::parseOperand(OperandVector &Operands,
   // features to be available during the operand check, or else we will fail to
   // find the custom parser, and then we will later get an InvalidOperand error
   // instead of a MissingFeature errror.
-  uint64_t AvailableFeatures = getAvailableFeatures();
-  setAvailableFeatures(~(uint64_t)0);
+  FeatureBitset AvailableFeatures = getAvailableFeatures();
+  FeatureBitset All;
+  All.set();
+  setAvailableFeatures(All);
   OperandMatchResultTy ResTy = MatchOperandParserImpl(Operands, Mnemonic);
   setAvailableFeatures(AvailableFeatures);
   if (ResTy == MatchOperand_Success)
@@ -1232,7 +1234,8 @@ bool SystemZAsmParser::parseOperand(OperandVector &Operands,
   return false;
 }
 
-static std::string SystemZMnemonicSpellCheck(StringRef S, uint64_t FBS,
+static std::string SystemZMnemonicSpellCheck(StringRef S,
+                                             const FeatureBitset &FBS,
                                              unsigned VariantID = 0);
 
 bool SystemZAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
@@ -1243,8 +1246,9 @@ bool SystemZAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   MCInst Inst;
   unsigned MatchResult;
 
+  FeatureBitset MissingFeatures;
   MatchResult = MatchInstructionImpl(Operands, Inst, ErrorInfo,
-                                     MatchingInlineAsm);
+                                     MissingFeatures, MatchingInlineAsm);
   switch (MatchResult) {
   case Match_Success:
     Inst.setLoc(IDLoc);
@@ -1252,17 +1256,15 @@ bool SystemZAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return false;
 
   case Match_MissingFeature: {
-    assert(ErrorInfo && "Unknown missing feature!");
+    assert(MissingFeatures.any() && "Unknown missing feature!");
     // Special case the error message for the very common case where only
     // a single subtarget feature is missing
     std::string Msg = "instruction requires:";
-    uint64_t Mask = 1;
-    for (unsigned I = 0; I < sizeof(ErrorInfo) * 8 - 1; ++I) {
-      if (ErrorInfo & Mask) {
+    for (unsigned I = 0, E = MissingFeatures.size(); I != E; ++I) {
+      if (MissingFeatures[I]) {
         Msg += " ";
-        Msg += getSubtargetFeatureName(ErrorInfo & Mask);
+        Msg += getSubtargetFeatureName(I);
       }
-      Mask <<= 1;
     }
     return Error(IDLoc, Msg);
   }
@@ -1281,7 +1283,7 @@ bool SystemZAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   }
 
   case Match_MnemonicFail: {
-    uint64_t FBS = ComputeAvailableFeatures(getSTI().getFeatureBits());
+    FeatureBitset FBS = ComputeAvailableFeatures(getSTI().getFeatureBits());
     std::string Suggestion = SystemZMnemonicSpellCheck(
       ((SystemZOperand &)*Operands[0]).getToken(), FBS);
     return Error(IDLoc, "invalid instruction" + Suggestion,

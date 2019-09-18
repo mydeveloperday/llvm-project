@@ -72,8 +72,21 @@ void llvm::valTypesFromMVTs(const ArrayRef<MVT> &In,
 std::unique_ptr<wasm::WasmSignature>
 llvm::signatureFromMVTs(const SmallVectorImpl<MVT> &Results,
                         const SmallVectorImpl<MVT> &Params) {
-  auto Sig = make_unique<wasm::WasmSignature>();
+  auto Sig = std::make_unique<wasm::WasmSignature>();
   valTypesFromMVTs(Results, Sig->Returns);
   valTypesFromMVTs(Params, Sig->Params);
   return Sig;
+}
+
+yaml::WebAssemblyFunctionInfo::WebAssemblyFunctionInfo(
+    const llvm::WebAssemblyFunctionInfo &MFI)
+    : CFGStackified(MFI.isCFGStackified()) {}
+
+void yaml::WebAssemblyFunctionInfo::mappingImpl(yaml::IO &YamlIO) {
+  MappingTraits<WebAssemblyFunctionInfo>::mapping(YamlIO, *this);
+}
+
+void WebAssemblyFunctionInfo::initializeBaseYamlFields(
+    const yaml::WebAssemblyFunctionInfo &YamlMFI) {
+  CFGStackified = YamlMFI.CFGStackified;
 }

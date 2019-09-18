@@ -71,8 +71,8 @@ void GCNMaxOccupancySchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU
   // the tracker, so we need to pass those function a non-const copy.
   RegPressureTracker &TempTracker = const_cast<RegPressureTracker&>(RPTracker);
 
-  std::vector<unsigned> Pressure;
-  std::vector<unsigned> MaxPressure;
+  Pressure.clear();
+  MaxPressure.clear();
 
   if (AtTop)
     TempTracker.getDownwardPressure(SU->getInstr(), Pressure, MaxPressure);
@@ -103,10 +103,10 @@ void GCNMaxOccupancySchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU
   // the analysis to look through dependencies to find the path with the least
   // register pressure.
 
-  // We only need to update the RPDelata for instructions that increase
-  // register pressure.  Instructions that decrease or keep reg pressure
-  // the same will be marked as RegExcess in tryCandidate() when they
-  // are compared with instructions that increase the register pressure.
+  // We only need to update the RPDelta for instructions that increase register
+  // pressure. Instructions that decrease or keep reg pressure the same will be
+  // marked as RegExcess in tryCandidate() when they are compared with
+  // instructions that increase the register pressure.
   if (ShouldTrackVGPRs && NewVGPRPressure >= VGPRExcessLimit) {
     Cand.RPDelta.Excess = PressureChange(SRI->getVGPRPressureSet());
     Cand.RPDelta.Excess.setUnitInc(NewVGPRPressure - VGPRExcessLimit);
@@ -445,8 +445,12 @@ void GCNScheduleDAGMILive::computeBlockPressure(const MachineBasicBlock *MBB) {
     RPTracker.reset(*MBB->begin(), &LiveIn);
     MBBLiveIns.erase(LiveInIt);
   } else {
-    I = Regions[CurRegion].first;
-    RPTracker.reset(*I);
+    auto &Rgn = Regions[CurRegion];
+    I = Rgn.first;
+    auto *NonDbgMI = &*skipDebugInstructionsForward(Rgn.first, Rgn.second);
+    auto LRS = BBLiveInMap.lookup(NonDbgMI);
+    assert(isEqual(getLiveRegsBefore(*NonDbgMI, *LIS), LRS));
+    RPTracker.reset(*I, &LRS);
   }
 
   for ( ; ; ) {
@@ -477,12 +481,32 @@ void GCNScheduleDAGMILive::computeBlockPressure(const MachineBasicBlock *MBB) {
   }
 }
 
+DenseMap<MachineInstr *, GCNRPTracker::LiveRegSet>
+GCNScheduleDAGMILive::getBBLiveInMap() const {
+  assert(!Regions.empty());
+  std::vector<MachineInstr *> BBStarters;
+  BBStarters.reserve(Regions.size());
+  auto I = Regions.rbegin(), E = Regions.rend();
+  auto *BB = I->first->getParent();
+  do {
+    auto *MI = &*skipDebugInstructionsForward(I->first, I->second);
+    BBStarters.push_back(MI);
+    do {
+      ++I;
+    } while (I != E && I->first->getParent() == BB);
+  } while (I != E);
+  return getLiveRegMap(BBStarters, false /*After*/, *LIS);
+}
+
 void GCNScheduleDAGMILive::finalizeSchedule() {
   GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
   LLVM_DEBUG(dbgs() << "All regions recorded, starting actual scheduling.\n");
 
   LiveIns.resize(Regions.size());
   Pressure.resize(Regions.size());
+
+  if (!Regions.empty())
+    BBLiveInMap = getBBLiveInMap();
 
   do {
     Stage++;

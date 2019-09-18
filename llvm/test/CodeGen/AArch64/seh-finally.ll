@@ -36,8 +36,8 @@ define void @simple_seh() #0 personality i8* bitcast (i32 (...)* @__C_specific_h
 entry:
 ; CHECK-LABEL: simple_seh
 ; CHECK: add     x29, sp, #16
-; CHECK: orr     x1, xzr, #0xfffffffffffffffe
-; CHECK: stur    x1, [x29, #-16]
+; CHECK: mov     x0, #-2
+; CHECK: stur    x0, [x29, #-16]
 ; CHECK: .set .Lsimple_seh$frame_escape_0, -8
 ; CHECK: ldur    w0, [x29, #-8]
 ; CHECK: bl      foo
@@ -86,12 +86,12 @@ entry:
 define void @stack_realign() #0 personality i8* bitcast (i32 (...)* @__C_specific_handler to i8*) {
 entry:
 ; CHECK-LABEL: stack_realign
-; CHECK: add     x29, sp, #16
+; CHECK: mov     x29, sp
 ; CHECK: sub     x9, sp, #64
 ; CHECK: and     sp, x9, #0xffffffffffffffe0
 ; CHECK: mov     x19, sp
-; CHECK: orr     x1, xzr, #0xfffffffffffffffe
-; CHECK: stur    x1, [x19, #16]
+; CHECK: mov     x0, #-2
+; CHECK: stur    x0, [x19, #16]
 ; CHECK: .set .Lstack_realign$frame_escape_0, 32
 ; CHECK: ldr     w0, [x19, #32]
 ; CHECK: bl      foo
@@ -141,7 +141,7 @@ define void @vla_present(i32 %n) #0 personality i8* bitcast (i32 (...)* @__C_spe
 entry:
 ; CHECK-LABEL: vla_present
 ; CHECK: add     x29, sp, #32
-; CHECK: orr     x1, xzr, #0xfffffffffffffffe
+; CHECK: mov     x1, #-2
 ; CHECK: stur    x1, [x29, #-32]
 ; CHECK: .set .Lvla_present$frame_escape_0, -4
 ; CHECK: stur    w0, [x29, #-4]
@@ -205,15 +205,15 @@ entry:
 define void @vla_and_realign(i32 %n) #0 personality i8* bitcast (i32 (...)* @__C_specific_handler to i8*) {
 entry:
 ; CHECK-LABEL: vla_and_realign
-; CHECK: add     x29, sp, #16
+; CHECK: mov     x29, sp
 ; CHECK: sub     x9, sp, #64
 ; CHECK: and     sp, x9, #0xffffffffffffffe0
 ; CHECK: mov     x19, sp
-; CHECK: orr     x1, xzr, #0xfffffffffffffffe
+; CHECK: mov     x1, #-2
 ; CHECK: stur    x1, [x19]
 ; CHECK: .set .Lvla_and_realign$frame_escape_0, 32
-; CHECK: stur    w0, [x29, #-4]
-; CHECK: ldur    w8, [x29, #-4]
+; CHECK: str     w0, [x29, #28]
+; CHECK: ldr     w8, [x29, #28]
 ; CHECK: mov     x9, sp
 ; CHECK: str     x9, [x19, #24]
 ; CHECK: str     x8, [x19, #16]

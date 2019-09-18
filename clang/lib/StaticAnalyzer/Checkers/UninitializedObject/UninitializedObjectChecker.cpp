@@ -20,10 +20,11 @@
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "UninitializedObject.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Driver/DriverDiagnostic.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicTypeMap.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicType.h"
 
 using namespace clang;
 using namespace clang::ento;
@@ -186,7 +187,7 @@ void UninitializedObjectChecker::checkEndFunction(
   if (Opts.ShouldConvertNotesToWarnings) {
     for (const auto &Pair : UninitFields) {
 
-      auto Report = llvm::make_unique<BugReport>(
+      auto Report = std::make_unique<PathSensitiveBugReport>(
           *BT_uninitField, Pair.second, Node, LocUsedForUniqueing,
           Node->getLocationContext()->getDecl());
       Context.emitReport(std::move(Report));
@@ -200,7 +201,7 @@ void UninitializedObjectChecker::checkEndFunction(
             << (UninitFields.size() == 1 ? "" : "s")
             << " at the end of the constructor call";
 
-  auto Report = llvm::make_unique<BugReport>(
+  auto Report = std::make_unique<PathSensitiveBugReport>(
       *BT_uninitField, WarningOS.str(), Node, LocUsedForUniqueing,
       Node->getLocationContext()->getDecl());
 
@@ -610,19 +611,21 @@ void ento::registerUninitializedObjectChecker(CheckerManager &Mgr) {
   AnalyzerOptions &AnOpts = Mgr.getAnalyzerOptions();
   UninitObjCheckerOptions &ChOpts = Chk->Opts;
 
-  ChOpts.IsPedantic =
-      AnOpts.getCheckerBooleanOption("Pedantic", /*DefaultVal*/ false, Chk);
-  ChOpts.ShouldConvertNotesToWarnings =
-      AnOpts.getCheckerBooleanOption("NotesAsWarnings",
-                                     /*DefaultVal*/ false, Chk);
+  ChOpts.IsPedantic = AnOpts.getCheckerBooleanOption(Chk, "Pedantic");
+  ChOpts.ShouldConvertNotesToWarnings = AnOpts.getCheckerBooleanOption(
+      Chk, "NotesAsWarnings");
   ChOpts.CheckPointeeInitialization = AnOpts.getCheckerBooleanOption(
-      "CheckPointeeInitialization", /*DefaultVal*/ false, Chk);
+      Chk, "CheckPointeeInitialization");
   ChOpts.IgnoredRecordsWithFieldPattern =
-      AnOpts.getCheckerStringOption("IgnoreRecordsWithField",
-                                    /*DefaultVal*/ "", Chk);
+      AnOpts.getCheckerStringOption(Chk, "IgnoreRecordsWithField");
   ChOpts.IgnoreGuardedFields =
-      AnOpts.getCheckerBooleanOption("IgnoreGuardedFields",
-                                     /*DefaultVal*/ false, Chk);
+      AnOpts.getCheckerBooleanOption(Chk, "IgnoreGuardedFields");
+
+  std::string ErrorMsg;
+  if (!llvm::Regex(ChOpts.IgnoredRecordsWithFieldPattern).isValid(ErrorMsg))
+    Mgr.reportInvalidCheckerOptionValue(Chk, "IgnoreRecordsWithField",
+        "a valid regex, building failed with error message "
+        "\"" + ErrorMsg + "\"");
 }
 
 bool ento::shouldRegisterUninitializedObjectChecker(const LangOptions &LO) {

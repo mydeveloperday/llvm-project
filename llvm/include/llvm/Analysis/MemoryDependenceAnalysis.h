@@ -362,11 +362,14 @@ private:
   PhiValues &PV;
   PredIteratorCache PredCache;
 
+  unsigned DefaultBlockScanLimit;
+
 public:
   MemoryDependenceResults(AliasAnalysis &AA, AssumptionCache &AC,
-                          const TargetLibraryInfo &TLI,
-                          DominatorTree &DT, PhiValues &PV)
-      : AA(AA), AC(AC), TLI(TLI), DT(DT), PV(PV) {}
+                          const TargetLibraryInfo &TLI, DominatorTree &DT,
+                          PhiValues &PV, unsigned DefaultBlockScanLimit)
+      : AA(AA), AC(AC), TLI(TLI), DT(DT), PV(PV),
+        DefaultBlockScanLimit(DefaultBlockScanLimit) {}
 
   /// Handle invalidation in the new PM.
   bool invalidate(Function &F, const PreservedAnalyses &PA,
@@ -381,7 +384,8 @@ public:
   ///
   /// See the class comment for more details. It is illegal to call this on
   /// non-memory instructions.
-  MemDepResult getDependency(Instruction *QueryInst);
+  MemDepResult getDependency(Instruction *QueryInst,
+                             OrderedBasicBlock *OBB = nullptr);
 
   /// Perform a full dependency query for the specified call, returning the set
   /// of blocks that the value is potentially live across.
@@ -447,14 +451,14 @@ public:
                                         BasicBlock::iterator ScanIt,
                                         BasicBlock *BB,
                                         Instruction *QueryInst = nullptr,
-                                        unsigned *Limit = nullptr);
+                                        unsigned *Limit = nullptr,
+                                        OrderedBasicBlock *OBB = nullptr);
 
-  MemDepResult getSimplePointerDependencyFrom(const MemoryLocation &MemLoc,
-                                              bool isLoad,
-                                              BasicBlock::iterator ScanIt,
-                                              BasicBlock *BB,
-                                              Instruction *QueryInst,
-                                              unsigned *Limit = nullptr);
+  MemDepResult
+  getSimplePointerDependencyFrom(const MemoryLocation &MemLoc, bool isLoad,
+                                 BasicBlock::iterator ScanIt, BasicBlock *BB,
+                                 Instruction *QueryInst, unsigned *Limit,
+                                 OrderedBasicBlock *OBB);
 
   /// This analysis looks for other loads and stores with invariant.group
   /// metadata and the same pointer operand. Returns Unknown if it does not
@@ -510,8 +514,13 @@ class MemoryDependenceAnalysis
 
   static AnalysisKey Key;
 
+  unsigned DefaultBlockScanLimit;
+
 public:
   using Result = MemoryDependenceResults;
+
+  MemoryDependenceAnalysis();
+  MemoryDependenceAnalysis(unsigned DefaultBlockScanLimit) : DefaultBlockScanLimit(DefaultBlockScanLimit) { }
 
   MemoryDependenceResults run(Function &F, FunctionAnalysisManager &AM);
 };

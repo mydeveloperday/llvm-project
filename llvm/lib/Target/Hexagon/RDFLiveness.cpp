@@ -57,7 +57,6 @@ static cl::opt<unsigned> MaxRecNest("rdf-liveness-max-rec", cl::init(25),
 namespace llvm {
 namespace rdf {
 
-  template<>
   raw_ostream &operator<< (raw_ostream &OS, const Print<Liveness::RefMap> &P) {
     OS << '{';
     for (auto &I : P.Obj) {
@@ -890,8 +889,8 @@ void Liveness::resetKills(MachineBasicBlock *B) {
       // implicit defs.
       if (!Op.isReg() || !Op.isDef() || Op.isImplicit())
         continue;
-      unsigned R = Op.getReg();
-      if (!TargetRegisterInfo::isPhysicalRegister(R))
+      Register R = Op.getReg();
+      if (!Register::isPhysicalRegister(R))
         continue;
       for (MCSubRegIterator SR(R, &TRI, true); SR.isValid(); ++SR)
         Live.reset(*SR);
@@ -899,8 +898,8 @@ void Liveness::resetKills(MachineBasicBlock *B) {
     for (auto &Op : MI->operands()) {
       if (!Op.isReg() || !Op.isUse() || Op.isUndef())
         continue;
-      unsigned R = Op.getReg();
-      if (!TargetRegisterInfo::isPhysicalRegister(R))
+      Register R = Op.getReg();
+      if (!Register::isPhysicalRegister(R))
         continue;
       bool IsLive = false;
       for (MCRegAliasIterator AR(R, &TRI, true); AR.isValid(); ++AR) {

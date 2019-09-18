@@ -55,7 +55,7 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def X6  : RISCVReg<6, "x6", ["t1"]>, DwarfRegNum<[6]>;
   def X7  : RISCVReg<7, "x7", ["t2"]>, DwarfRegNum<[7]>;
   }
-  def X8  : RISCVReg<8, "x8", ["s0"]>, DwarfRegNum<[8]>;
+  def X8  : RISCVReg<8, "x8", ["s0", "fp"]>, DwarfRegNum<[8]>;
   def X9  : RISCVReg<9, "x9", ["s1"]>, DwarfRegNum<[9]>;
   def X10 : RISCVReg<10,"x10", ["a0"]>, DwarfRegNum<[10]>;
   def X11 : RISCVReg<11,"x11", ["a1"]>, DwarfRegNum<[11]>;
@@ -96,6 +96,12 @@ def GPR : RegisterClass<"RISCV", [XLenVT], 32, (add
     (sequence "X%u", 18, 27),
     (sequence "X%u", 0, 4)
   )> {
+  let RegInfos = RegInfoByHwMode<
+      [RV32,              RV64,              DefaultMode],
+      [RegInfo<32,32,32>, RegInfo<64,64,64>, RegInfo<32,32,32>]>;
+}
+
+def GPRX0 : RegisterClass<"RISCV", [XLenVT], 32, (add X0)> {
   let RegInfos = RegInfoByHwMode<
       [RV32,              RV64,              DefaultMode],
       [RegInfo<32,32,32>, RegInfo<64,64,64>, RegInfo<32,32,32>]>;

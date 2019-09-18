@@ -8,6 +8,7 @@
 //
 // UNSUPPORTED: libcpp-has-no-threads
 // UNSUPPORTED: c++98, c++03, c++11
+// XFAIL: dylib-has-no-shared_mutex
 
 // <shared_mutex>
 
@@ -17,7 +18,9 @@
 
 #include <shared_mutex>
 #include <cassert>
-#include "nasty_containers.hpp"
+#include "nasty_containers.h"
+
+#include "test_macros.h"
 
 int main(int, char**)
 {

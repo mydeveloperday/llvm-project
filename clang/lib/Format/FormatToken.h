@@ -60,16 +60,18 @@ namespace format {
   TYPE(JsExponentiationEqual)                                                  \
   TYPE(JsFatArrow)                                                             \
   TYPE(JsNonNullAssertion)                                                     \
+  TYPE(JsPrivateIdentifier)                                                    \
   TYPE(JsTypeColon)                                                            \
   TYPE(JsTypeOperator)                                                         \
   TYPE(JsTypeOptionalQuestion)                                                 \
-  TYPE(JsPrivateIdentifier)                                                    \
   TYPE(LambdaArrow)                                                            \
+  TYPE(LambdaLBrace)                                                           \
   TYPE(LambdaLSquare)                                                          \
   TYPE(LeadingJavaAnnotation)                                                  \
   TYPE(LineComment)                                                            \
   TYPE(MacroBlockBegin)                                                        \
   TYPE(MacroBlockEnd)                                                          \
+  TYPE(NamespaceMacro)                                                         \
   TYPE(ObjCBlockLBrace)                                                        \
   TYPE(ObjCBlockLParen)                                                        \
   TYPE(ObjCDecl)                                                               \
@@ -95,6 +97,7 @@ namespace format {
   TYPE(TrailingAnnotation)                                                     \
   TYPE(TrailingReturnArrow)                                                    \
   TYPE(TrailingUnaryOperator)                                                  \
+  TYPE(TypenameMacro)                                                          \
   TYPE(UnaryOperator)                                                          \
   TYPE(CSharpStringLiteral)                                                    \
   TYPE(CSharpNullCoalescing)                                                   \
@@ -324,6 +327,11 @@ struct FormatToken {
   }
   template <typename T> bool isNot(T Kind) const { return !is(Kind); }
 
+  bool isIf(bool AllowConstexprMacro = true) const {
+    return is(tok::kw_if) || endsSequence(tok::kw_constexpr, tok::kw_if) ||
+           (endsSequence(tok::identifier, tok::kw_if) && AllowConstexprMacro);
+  }
+
   bool closesScopeAfterBlock() const {
     if (BlockKind == BK_Block)
       return true;
@@ -341,6 +349,10 @@ struct FormatToken {
 
   /// \c true if this token ends a sequence with the given tokens in order,
   /// following the ``Previous`` pointers, ignoring comments.
+  /// For example, given tokens [T1, T2, T3], the function returns true if
+  /// 3 tokens ending at this (ignoring comments) are [T3, T2, T1]. In other
+  /// words, the tokens passed to this function need to the reverse of the
+  /// order the tokens appear in code.
   template <typename A, typename... Ts>
   bool endsSequence(A K1, Ts... Tokens) const {
     return endsSequenceInternal(K1, Tokens...);
@@ -492,8 +504,7 @@ struct FormatToken {
   bool opensBlockOrBlockTypeList(const FormatStyle &Style) const {
     if (is(TT_TemplateString) && opensScope())
       return true;
-    return is(TT_ArrayInitializerLSquare) ||
-           is(TT_ProtoExtensionLSquare) ||
+    return is(TT_ArrayInitializerLSquare) || is(TT_ProtoExtensionLSquare) ||
            (is(tok::l_brace) &&
             (BlockKind == BK_Block || is(TT_DictLiteral) ||
              (!Style.Cpp11BracedListStyle && NestingLevel == 0))) ||
@@ -530,8 +541,10 @@ struct FormatToken {
     // Detect "(inline|export)? namespace" in the beginning of a line.
     if (NamespaceTok && NamespaceTok->isOneOf(tok::kw_inline, tok::kw_export))
       NamespaceTok = NamespaceTok->getNextNonComment();
-    return NamespaceTok && NamespaceTok->is(tok::kw_namespace) ? NamespaceTok
-                                                               : nullptr;
+    return NamespaceTok &&
+                   NamespaceTok->isOneOf(tok::kw_namespace, TT_NamespaceMacro)
+               ? NamespaceTok
+               : nullptr;
   }
 
 private:
@@ -673,8 +686,10 @@ struct AdditionalKeywords {
     kw_override = &IdentTable.get("override");
     kw_in = &IdentTable.get("in");
     kw_of = &IdentTable.get("of");
+    kw_CF_CLOSED_ENUM = &IdentTable.get("CF_CLOSED_ENUM");
     kw_CF_ENUM = &IdentTable.get("CF_ENUM");
     kw_CF_OPTIONS = &IdentTable.get("CF_OPTIONS");
+    kw_NS_CLOSED_ENUM = &IdentTable.get("NS_CLOSED_ENUM");
     kw_NS_ENUM = &IdentTable.get("NS_ENUM");
     kw_NS_OPTIONS = &IdentTable.get("NS_OPTIONS");
 
@@ -727,6 +742,7 @@ struct AdditionalKeywords {
     kw_qslots = &IdentTable.get("Q_SLOTS");
 
     // C# keywords
+    kw_dollar = &IdentTable.get("dollar");
     kw_base = &IdentTable.get("base");
     kw_byte = &IdentTable.get("byte");
     kw_checked = &IdentTable.get("checked");
@@ -782,8 +798,10 @@ struct AdditionalKeywords {
   IdentifierInfo *kw_override;
   IdentifierInfo *kw_in;
   IdentifierInfo *kw_of;
+  IdentifierInfo *kw_CF_CLOSED_ENUM;
   IdentifierInfo *kw_CF_ENUM;
   IdentifierInfo *kw_CF_OPTIONS;
+  IdentifierInfo *kw_NS_CLOSED_ENUM;
   IdentifierInfo *kw_NS_ENUM;
   IdentifierInfo *kw_NS_OPTIONS;
   IdentifierInfo *kw___except;
@@ -841,6 +859,7 @@ struct AdditionalKeywords {
   IdentifierInfo *kw_qslots;
 
   // C# keywords
+  IdentifierInfo *kw_dollar;
   IdentifierInfo *kw_base;
   IdentifierInfo *kw_byte;
   IdentifierInfo *kw_checked;

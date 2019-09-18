@@ -6,7 +6,7 @@
 //
 //  
 //  This file implements the "Exception Handling APIs"
-//  http://mentorembedded.github.io/cxx-abi/abi-eh.html
+//  https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html
 //  
 //===----------------------------------------------------------------------===//
 
@@ -15,8 +15,8 @@
 #include "cxxabi.h"
 
 #include <exception>        // for std::terminate
-#include "cxa_exception.hpp"
-#include "cxa_handlers.hpp"
+#include "cxa_exception.h"
+#include "cxa_handlers.h"
 
 namespace __cxxabiv1 {
 

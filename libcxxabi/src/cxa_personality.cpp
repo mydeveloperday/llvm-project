@@ -6,7 +6,7 @@
 //
 //  
 //  This file implements the "Exception Handling APIs"
-//  http://mentorembedded.github.io/cxx-abi/abi-eh.html
+//  https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html
 //  http://www.intel.com/design/itanium/downloads/245358.htm
 //  
 //===----------------------------------------------------------------------===//
@@ -17,8 +17,8 @@
 #include <typeinfo>
 
 #include "__cxxabi_config.h"
-#include "cxa_exception.hpp"
-#include "cxa_handlers.hpp"
+#include "cxa_exception.h"
+#include "cxa_handlers.h"
 #include "private_typeinfo.h"
 #include "unwind.h"
 

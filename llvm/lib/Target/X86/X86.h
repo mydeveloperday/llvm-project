@@ -49,11 +49,6 @@ FunctionPass *createX86FloatingPointStackifierPass();
 /// transition penalty between functions encoded with AVX and SSE.
 FunctionPass *createX86IssueVZeroUpperPass();
 
-/// This pass instruments the function prolog to save the return address to a
-/// 'shadow call stack' and the function epilog to check that the return address
-/// did not change during function execution.
-FunctionPass *createShadowCallStackPass();
-
 /// This pass inserts ENDBR instructions before indirect jump/call
 /// destinations as part of CET IBT mechanism.
 FunctionPass *createX86IndirectBranchTrackingPass();
@@ -85,6 +80,12 @@ FunctionPass *createX86FlagsCopyLoweringPass();
 
 /// Return a pass that expands WinAlloca pseudo-instructions.
 FunctionPass *createX86WinAllocaExpander();
+
+/// Return a pass that inserts int3 at the end of the function if it ends with a
+/// CALL instruction. The pass does the same for each funclet as well. This
+/// ensures that the open interval of function start and end PCs contains all
+/// return addresses for the benefit of the Windows x64 unwinder.
+FunctionPass *createX86AvoidTrailingCallPass();
 
 /// Return a pass that optimizes the code-size of x86 call sequences. This is
 /// done by replacing esp-relative movs with pushes.
@@ -137,7 +138,7 @@ FunctionPass *createX86SpeculativeLoadHardeningPass();
 void initializeEvexToVexInstPassPass(PassRegistry &);
 void initializeFixupBWInstPassPass(PassRegistry &);
 void initializeFixupLEAPassPass(PassRegistry &);
-void initializeShadowCallStackPass(PassRegistry &);
+void initializeFPSPass(PassRegistry &);
 void initializeWinEHStatePassPass(PassRegistry &);
 void initializeX86AvoidSFBPassPass(PassRegistry &);
 void initializeX86CallFrameOptimizationPass(PassRegistry &);
@@ -145,9 +146,10 @@ void initializeX86CmovConverterPassPass(PassRegistry &);
 void initializeX86CondBrFoldingPassPass(PassRegistry &);
 void initializeX86DomainReassignmentPass(PassRegistry &);
 void initializeX86ExecutionDomainFixPass(PassRegistry &);
+void initializeX86ExpandPseudoPass(PassRegistry &);
 void initializeX86FlagsCopyLoweringPassPass(PassRegistry &);
+void initializeX86OptimizeLEAPassPass(PassRegistry &);
 void initializeX86SpeculativeLoadHardeningPassPass(PassRegistry &);
-
 } // End llvm namespace
 
 #endif

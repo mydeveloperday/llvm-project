@@ -95,10 +95,11 @@ void LiveRangeCalc::calculate(LiveInterval &LI, bool TrackSubRegs) {
       }
 
       LI.refineSubRanges(*Alloc, SubMask,
-          [&MO, this](LiveInterval::SubRange &SR) {
-        if (MO.isDef())
-          createDeadDef(*Indexes, *Alloc, SR, MO);
-      });
+                         [&MO, this](LiveInterval::SubRange &SR) {
+                           if (MO.isDef())
+                             createDeadDef(*Indexes, *Alloc, SR, MO);
+                         },
+                         *Indexes, TRI);
     }
 
     // Create the def in the main liverange. We do not have to do this if
@@ -371,8 +372,7 @@ bool LiveRangeCalc::findReachingDefs(LiveRange &LR, MachineBasicBlock &UseMBB,
       report_fatal_error("Use not jointly dominated by defs.");
     }
 
-    if (TargetRegisterInfo::isPhysicalRegister(PhysReg) &&
-        !MBB->isLiveIn(PhysReg)) {
+    if (Register::isPhysicalRegister(PhysReg) && !MBB->isLiveIn(PhysReg)) {
       MBB->getParent()->verify();
       const TargetRegisterInfo *TRI = MRI->getTargetRegisterInfo();
       errs() << "The register " << printReg(PhysReg, TRI)

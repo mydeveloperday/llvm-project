@@ -174,6 +174,10 @@ struct VectorizationFactor {
 
   // Width 1 means no vectorization, cost 0 means uncomputed cost.
   static VectorizationFactor Disabled() { return {1, 0}; }
+
+  bool operator==(const VectorizationFactor &rhs) const {
+    return Width == rhs.Width && Cost == rhs.Cost;
+  }
 };
 
 /// Planner drives the vectorization process after having passed
@@ -194,10 +198,8 @@ class LoopVectorizationPlanner {
   /// The legality analysis.
   LoopVectorizationLegality *Legal;
 
-  /// The profitablity analysis.
+  /// The profitability analysis.
   LoopVectorizationCostModel &CM;
-
-  using VPlanPtr = std::unique_ptr<VPlan>;
 
   SmallVector<VPlanPtr, 4> VPlans;
 
@@ -226,11 +228,11 @@ public:
 
   /// Plan how to best vectorize, return the best VF and its cost, or None if
   /// vectorization and interleaving should be avoided up front.
-  Optional<VectorizationFactor> plan(bool OptForSize, unsigned UserVF);
+  Optional<VectorizationFactor> plan(unsigned UserVF);
 
   /// Use the VPlan-native path to plan how to best vectorize, return the best
   /// VF and its cost.
-  VectorizationFactor planInVPlanNativePath(bool OptForSize, unsigned UserVF);
+  VectorizationFactor planInVPlanNativePath(unsigned UserVF);
 
   /// Finalize the best decision and dispose of all other VPlans.
   void setBestPlan(unsigned VF, unsigned UF);

@@ -39,7 +39,7 @@ public:
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override {
     // Check if software floating point is enabled
-    auto Feature = std::find(Features.begin(), Features.end(), "+soft-float");
+    auto Feature = llvm::find(Features, "+soft-float");
     if (Feature != Features.end()) {
       SoftFloat = true;
     }
@@ -208,6 +208,7 @@ public:
     // aligned. The SPARCv9 SCD 2.4.1 says 16-byte aligned.
     LongDoubleWidth = 128;
     LongDoubleAlign = 128;
+    SuitableAlign = 128;
     LongDoubleFormat = &llvm::APFloat::IEEEquad();
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
   }

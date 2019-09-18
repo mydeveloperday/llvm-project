@@ -26,7 +26,7 @@ void __ompt_lw_taskteam_init(ompt_lw_taskteam_t *lwt, kmp_info_t *thr,
                              int gtid, ompt_data_t *ompt_pid, void *codeptr);
 
 void __ompt_lw_taskteam_link(ompt_lw_taskteam_t *lwt, kmp_info_t *thr,
-                             int on_heap);
+                             int on_heap, bool always = false);
 
 void __ompt_lw_taskteam_unlink(kmp_info_t *thr);
 
@@ -49,6 +49,8 @@ ompt_data_t *__ompt_get_thread_data_internal();
  * Unused currently
 static uint64_t __ompt_get_get_unique_id_internal();
 */
+
+ompt_sync_region_t __ompt_get_barrier_kind(enum barrier_type, kmp_info_t *);
 
 /*****************************************************************************
  * macros

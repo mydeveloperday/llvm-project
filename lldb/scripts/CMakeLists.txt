@@ -9,13 +9,16 @@ set(SWIG_HEADERS
   ${LLDB_SOURCE_DIR}/include/lldb/lldb-versioning.h
 )
 
-include(FindPythonInterp)
-
 if(LLDB_BUILD_FRAMEWORK)
   set(framework_arg --framework --target-platform Darwin)
 endif()
 
 find_package(SWIG REQUIRED)
+set(SWIG_MIN_VERSION "2.0.0")
+if (${SWIG_VERSION} VERSION_LESS ${SWIG_MIN_VERSION})
+  message(FATAL_ERROR "LLDB requires swig ${SWIG_MIN_VERSION}, your version is ${SWIG_VERSION}.")
+endif()
+
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/LLDBWrapPython.cpp
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/lldb.py
@@ -23,7 +26,6 @@ add_custom_command(
   DEPENDS ${SWIG_INTERFACES}
   DEPENDS ${SWIG_HEADERS}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Python/prepare_binding_Python.py
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Python/modify-python-lldb.py
   COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/prepare_bindings.py
       ${framework_arg}
       --srcRoot=${LLDB_SOURCE_DIR}
@@ -40,18 +42,17 @@ add_custom_target(swig_wrapper ALL DEPENDS
 )
 
 if(NOT LLDB_BUILD_FRAMEWORK)
-  if(CMAKE_SYSTEM_NAME MATCHES "Windows")
-    set(swig_python_subdir site-packages)
+  # The path here should match the result of python function
+  # distutils.sysconfig.get_python_lib().
+  if(CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
+    set(swig_python_subdir Lib/site-packages)
   else()
-    set(swig_python_subdir python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR})
+    set(swig_python_subdir lib/python${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR})
   endif()
 
-  set(SWIG_PYTHON_DIR ${LLVM_LIBRARY_OUTPUT_INTDIR}/${swig_python_subdir})
+  set(SWIG_PYTHON_DIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/${swig_python_subdir})
   set(SWIG_INSTALL_DIR lib${LLVM_LIBDIR_SUFFIX})
 
   # Install the LLDB python module
   install(DIRECTORY ${SWIG_PYTHON_DIR} DESTINATION ${SWIG_INSTALL_DIR})
 endif()
-
-# build Python modules
-add_subdirectory(Python/modules)

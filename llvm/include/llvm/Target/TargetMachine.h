@@ -35,6 +35,9 @@ class MCSubtargetInfo;
 class MCSymbol;
 class raw_pwrite_stream;
 class PassManagerBuilder;
+struct PerFunctionMIParsingState;
+class SMDiagnostic;
+class SMRange;
 class Target;
 class TargetIntrinsicInfo;
 class TargetIRAnalysis;
@@ -48,6 +51,10 @@ namespace legacy {
 class PassManagerBase;
 }
 using legacy::PassManagerBase;
+
+namespace yaml {
+struct MachineFunctionInfo;
+}
 
 //===----------------------------------------------------------------------===//
 ///
@@ -114,6 +121,27 @@ public:
     return nullptr;
   }
 
+  /// Allocate and return a default initialized instance of the YAML
+  /// representation for the MachineFunctionInfo.
+  virtual yaml::MachineFunctionInfo *createDefaultFuncInfoYAML() const {
+    return nullptr;
+  }
+
+  /// Allocate and initialize an instance of the YAML representation of the
+  /// MachineFunctionInfo.
+  virtual yaml::MachineFunctionInfo *
+  convertFuncInfoToYAML(const MachineFunction &MF) const {
+    return nullptr;
+  }
+
+  /// Parse out the target's MachineFunctionInfo from the YAML reprsentation.
+  virtual bool parseMachineFunctionInfo(const yaml::MachineFunctionInfo &,
+                                        PerFunctionMIParsingState &PFS,
+                                        SMDiagnostic &Error,
+                                        SMRange &SourceRange) const {
+    return false;
+  }
+
   /// This method returns a pointer to the specified type of
   /// TargetSubtargetInfo.  In debug builds, it verifies that the object being
   /// returned is of the correct type.
@@ -129,7 +157,7 @@ public:
   /// The LLVM Module owns a DataLayout that is used for the target independent
   /// optimizations and code generation. This hook provides a target specific
   /// check on the validity of this DataLayout.
-  bool isCompatibleDataLayout(const DataLayout &Candidate) const {
+  virtual bool isCompatibleDataLayout(const DataLayout &Candidate) const {
     return DL == Candidate;
   }
 
@@ -362,9 +390,9 @@ inline CodeModel::Model getEffectiveCodeModel(Optional<CodeModel::Model> CM,
   if (CM) {
     // By default, targets do not support the tiny and kernel models.
     if (*CM == CodeModel::Tiny)
-      report_fatal_error("Target does not support the tiny CodeModel");
+      report_fatal_error("Target does not support the tiny CodeModel", false);
     if (*CM == CodeModel::Kernel)
-      report_fatal_error("Target does not support the kernel CodeModel");
+      report_fatal_error("Target does not support the kernel CodeModel", false);
     return *CM;
   }
   return Default;

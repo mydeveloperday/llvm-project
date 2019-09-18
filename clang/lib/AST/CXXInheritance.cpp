@@ -44,7 +44,7 @@ void CXXBasePaths::ComputeDeclsFound() {
     Decls.insert(Path->Decls.front());
 
   NumDeclsFound = Decls.size();
-  DeclsFound = llvm::make_unique<NamedDecl *[]>(NumDeclsFound);
+  DeclsFound = std::make_unique<NamedDecl *[]>(NumDeclsFound);
   std::copy(Decls.begin(), Decls.end(), DeclsFound.get());
 }
 
@@ -554,8 +554,7 @@ void OverridingMethods::add(unsigned OverriddenSubobject,
                             UniqueVirtualMethod Overriding) {
   SmallVectorImpl<UniqueVirtualMethod> &SubobjectOverrides
     = Overrides[OverriddenSubobject];
-  if (std::find(SubobjectOverrides.begin(), SubobjectOverrides.end(),
-                Overriding) == SubobjectOverrides.end())
+  if (llvm::find(SubobjectOverrides, Overriding) == SubobjectOverrides.end())
     SubobjectOverrides.push_back(Overriding);
 }
 

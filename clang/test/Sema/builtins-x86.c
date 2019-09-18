@@ -37,7 +37,7 @@ __m128d test__builtin_ia32_cmpsd(__m128d __a, __m128d __b) {
   return __builtin_ia32_cmpsd(__a, __b, 32); // expected-error {{argument value 32 is outside the valid range [0, 31]}}
 }
 
-__mmask16 test__builtin_ia32_cmpps512_mask(__m512d __a, __m512d __b) {
+__mmask16 test__builtin_ia32_cmpps512_mask(__m512 __a, __m512 __b) {
   return __builtin_ia32_cmpps512_mask(__a, __b, 32, -1, 4); // expected-error {{argument value 32 is outside the valid range [0, 31]}}
 }
 
@@ -79,6 +79,27 @@ __m128i test__builtin_ia32_vpcomq(__m128i __a, __m128i __b) {
 
 __mmask16 test__builtin_ia32_cmpps512_mask_rounding(__m512 __a, __m512 __b, __mmask16 __u) {
   return __builtin_ia32_cmpps512_mask(__a, __b, 0, __u, 0); // expected-error {{invalid rounding argument}}
+}
+
+// Make sure we allow 4(CUR_DIRECTION), 8(NO_EXC), and 12(CUR_DIRECTION|NOEXC) for SAE arguments.
+__mmask16 test__builtin_ia32_cmpps512_mask_rounding_cur_dir(__m512 __a, __m512 __b, __mmask16 __u) {
+  return __builtin_ia32_cmpps512_mask(__a, __b, 0, __u, 4); // no-error
+}
+
+__mmask16 test__builtin_ia32_cmpps512_mask_rounding_sae1(__m512 __a, __m512 __b, __mmask16 __u) {
+  return __builtin_ia32_cmpps512_mask(__a, __b, 0, __u, 8); // no-error
+}
+
+__mmask16 test__builtin_ia32_cmpps512_mask_rounding_sae2(__m512 __a, __m512 __b, __mmask16 __u) {
+  return __builtin_ia32_cmpps512_mask(__a, __b, 0, __u, 12); // no-error
+}
+
+__m512 test__builtin_ia32_getmantps512_mask(__m512 a, __m512 b) {
+  return __builtin_ia32_getmantps512_mask(a, 0, b, (__mmask16)-1, 10); // expected-error {{invalid rounding argument}}
+}
+
+__m128 test__builtin_ia32_getmantss_round_mask(__m128 a, __m128 b, __m128 c) {
+  return __builtin_ia32_getmantss_round_mask(a, b, 0, c, (__mmask8)-1, 10); // expected-error {{invalid rounding argument}}
 }
 
 __m128i test_mm_mask_i32gather_epi32(__m128i a, int const *b, __m128i c, __m128i mask) {

@@ -41,6 +41,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/BasicBlock.h"
@@ -60,6 +61,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils/SizeOpts.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -111,10 +113,9 @@ public:
     if (ConstHoistWithBlockFrequency)
       AU.addRequired<BlockFrequencyInfoWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<ProfileSummaryInfoWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
   }
-
-  void releaseMemory() override { Impl.releaseMemory(); }
 
 private:
   ConstantHoistingPass Impl;
@@ -128,6 +129,7 @@ INITIALIZE_PASS_BEGIN(ConstantHoistingLegacyPass, "consthoist",
                       "Constant Hoisting", false, false)
 INITIALIZE_PASS_DEPENDENCY(BlockFrequencyInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ProfileSummaryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_END(ConstantHoistingLegacyPass, "consthoist",
                     "Constant Hoisting", false, false)
@@ -150,7 +152,8 @@ bool ConstantHoistingLegacyPass::runOnFunction(Function &Fn) {
                    ConstHoistWithBlockFrequency
                        ? &getAnalysis<BlockFrequencyInfoWrapperPass>().getBFI()
                        : nullptr,
-                   Fn.getEntryBlock());
+                   Fn.getEntryBlock(),
+                   &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI());
 
   if (MadeChange) {
     LLVM_DEBUG(dbgs() << "********** Function after Constant Hoisting: "
@@ -201,7 +204,7 @@ Instruction *ConstantHoistingPass::findMatInsertPt(Instruction *Inst,
 /// set found in \p BBs.
 static void findBestInsertionSet(DominatorTree &DT, BlockFrequencyInfo &BFI,
                                  BasicBlock *Entry,
-                                 SmallPtrSet<BasicBlock *, 8> &BBs) {
+                                 SetVector<BasicBlock *> &BBs) {
   assert(!BBs.count(Entry) && "Assume Entry is not in BBs");
   // Nodes on the current path to the root.
   SmallPtrSet<BasicBlock *, 8> Path;
@@ -210,6 +213,9 @@ static void findBestInsertionSet(DominatorTree &DT, BlockFrequencyInfo &BFI,
   // in the dominator tree from Entry to 'BB'.
   SmallPtrSet<BasicBlock *, 16> Candidates;
   for (auto BB : BBs) {
+    // Ignore unreachable basic blocks.
+    if (!DT.isReachableFromEntry(BB))
+      continue;
     Path.clear();
     // Walk up the dominator tree until Entry or another BB in BBs
     // is reached. Insert the nodes on the way to the Path.
@@ -251,7 +257,7 @@ static void findBestInsertionSet(DominatorTree &DT, BlockFrequencyInfo &BFI,
 
   // Visit Orders in bottom-up order.
   using InsertPtsCostPair =
-      std::pair<SmallPtrSet<BasicBlock *, 16>, BlockFrequency>;
+      std::pair<SetVector<BasicBlock *>, BlockFrequency>;
 
   // InsertPtsMap is a map from a BB to the best insertion points for the
   // subtree of BB (subtree not including the BB itself).
@@ -260,7 +266,7 @@ static void findBestInsertionSet(DominatorTree &DT, BlockFrequencyInfo &BFI,
   for (auto RIt = Orders.rbegin(); RIt != Orders.rend(); RIt++) {
     BasicBlock *Node = *RIt;
     bool NodeInBBs = BBs.count(Node);
-    SmallPtrSet<BasicBlock *, 16> &InsertPts = InsertPtsMap[Node].first;
+    auto &InsertPts = InsertPtsMap[Node].first;
     BlockFrequency &InsertPtsFreq = InsertPtsMap[Node].second;
 
     // Return the optimal insert points in BBs.
@@ -277,7 +283,7 @@ static void findBestInsertionSet(DominatorTree &DT, BlockFrequencyInfo &BFI,
     BasicBlock *Parent = DT.getNode(Node)->getIDom()->getBlock();
     // Initially, ParentInsertPts is empty and ParentPtsFreq is 0. Every child
     // will update its parent's ParentInsertPts and ParentPtsFreq.
-    SmallPtrSet<BasicBlock *, 16> &ParentInsertPts = InsertPtsMap[Parent].first;
+    auto &ParentInsertPts = InsertPtsMap[Parent].first;
     BlockFrequency &ParentPtsFreq = InsertPtsMap[Parent].second;
     // Choose to insert in Node or in subtree of Node.
     // Don't hoist to EHPad because we may not find a proper place to insert
@@ -299,12 +305,12 @@ static void findBestInsertionSet(DominatorTree &DT, BlockFrequencyInfo &BFI,
 }
 
 /// Find an insertion point that dominates all uses.
-SmallPtrSet<Instruction *, 8> ConstantHoistingPass::findConstantInsertionPoint(
+SetVector<Instruction *> ConstantHoistingPass::findConstantInsertionPoint(
     const ConstantInfo &ConstInfo) const {
   assert(!ConstInfo.RebasedConstants.empty() && "Invalid constant info entry.");
   // Collect all basic blocks.
-  SmallPtrSet<BasicBlock *, 8> BBs;
-  SmallPtrSet<Instruction *, 8> InsertPts;
+  SetVector<BasicBlock *> BBs;
+  SetVector<Instruction *> InsertPts;
   for (auto const &RCI : ConstInfo.RebasedConstants)
     for (auto const &U : RCI.Uses)
       BBs.insert(findMatInsertPt(U.Inst, U.OpndIdx)->getParent());
@@ -327,15 +333,13 @@ SmallPtrSet<Instruction *, 8> ConstantHoistingPass::findConstantInsertionPoint(
 
   while (BBs.size() >= 2) {
     BasicBlock *BB, *BB1, *BB2;
-    BB1 = *BBs.begin();
-    BB2 = *std::next(BBs.begin());
+    BB1 = BBs.pop_back_val();
+    BB2 = BBs.pop_back_val();
     BB = DT->findNearestCommonDominator(BB1, BB2);
     if (BB == Entry) {
       InsertPts.insert(&Entry->front());
       return InsertPts;
     }
-    BBs.erase(BB1);
-    BBs.erase(BB2);
     BBs.insert(BB);
   }
   assert((BBs.size() == 1) && "Expected only one element.");
@@ -547,7 +551,9 @@ ConstantHoistingPass::maximizeConstantsInRange(ConstCandVecType::iterator S,
                                            ConstCandVecType::iterator &MaxCostItr) {
   unsigned NumUses = 0;
 
-  if(!Entry->getParent()->optForSize() || std::distance(S,E) > 100) {
+  bool OptForSize = Entry->getParent()->hasOptSize() ||
+                    llvm::shouldOptimizeForSize(Entry->getParent(), PSI, BFI);
+  if (!OptForSize || std::distance(S,E) > 100) {
     for (auto ConstCand = S; ConstCand != E; ++ConstCand) {
       NumUses += ConstCand->Uses.size();
       if (ConstCand->CumulativeCost > MaxCostItr->CumulativeCost)
@@ -639,8 +645,8 @@ void ConstantHoistingPass::findBaseConstants(GlobalVariable *BaseGV) {
       ConstGEPInfoMap[BaseGV] : ConstIntInfoVec;
 
   // Sort the constants by value and type. This invalidates the mapping!
-  std::stable_sort(ConstCandVec.begin(), ConstCandVec.end(),
-             [](const ConstantCandidate &LHS, const ConstantCandidate &RHS) {
+  llvm::stable_sort(ConstCandVec, [](const ConstantCandidate &LHS,
+                                     const ConstantCandidate &RHS) {
     if (LHS.ConstInt->getType() != RHS.ConstInt->getType())
       return LHS.ConstInt->getType()->getBitWidth() <
              RHS.ConstInt->getType()->getBitWidth();
@@ -822,8 +828,10 @@ bool ConstantHoistingPass::emitBaseConstants(GlobalVariable *BaseGV) {
   SmallVectorImpl<consthoist::ConstantInfo> &ConstInfoVec =
       BaseGV ? ConstGEPInfoMap[BaseGV] : ConstIntInfoVec;
   for (auto const &ConstInfo : ConstInfoVec) {
-    SmallPtrSet<Instruction *, 8> IPSet = findConstantInsertionPoint(ConstInfo);
-    assert(!IPSet.empty() && "IPSet is empty");
+    SetVector<Instruction *> IPSet = findConstantInsertionPoint(ConstInfo);
+    // We can have an empty set if the function contains unreachable blocks.
+    if (IPSet.empty())
+      continue;
 
     unsigned UsesNum = 0;
     unsigned ReBasesNum = 0;
@@ -916,13 +924,14 @@ void ConstantHoistingPass::deleteDeadCastInst() const {
 /// Optimize expensive integer constants in the given function.
 bool ConstantHoistingPass::runImpl(Function &Fn, TargetTransformInfo &TTI,
                                    DominatorTree &DT, BlockFrequencyInfo *BFI,
-                                   BasicBlock &Entry) {
+                                   BasicBlock &Entry, ProfileSummaryInfo *PSI) {
   this->TTI = &TTI;
   this->DT = &DT;
   this->BFI = BFI;
   this->DL = &Fn.getParent()->getDataLayout();
   this->Ctx = &Fn.getContext();
   this->Entry = &Entry;
+  this->PSI = PSI;
   // Collect all constant candidates.
   collectConstantCandidates(Fn);
 
@@ -947,6 +956,8 @@ bool ConstantHoistingPass::runImpl(Function &Fn, TargetTransformInfo &TTI,
   // Cleanup dead instructions.
   deleteDeadCastInst();
 
+  cleanup();
+
   return MadeChange;
 }
 
@@ -957,7 +968,9 @@ PreservedAnalyses ConstantHoistingPass::run(Function &F,
   auto BFI = ConstHoistWithBlockFrequency
                  ? &AM.getResult<BlockFrequencyAnalysis>(F)
                  : nullptr;
-  if (!runImpl(F, TTI, DT, BFI, F.getEntryBlock()))
+  auto &MAM = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F).getManager();
+  auto *PSI = MAM.getCachedResult<ProfileSummaryAnalysis>(*F.getParent());
+  if (!runImpl(F, TTI, DT, BFI, F.getEntryBlock(), PSI))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;

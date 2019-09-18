@@ -38,7 +38,7 @@ struct Context {
 
     MRI.reset(TheTarget->createMCRegInfo(Triple));
     MAI.reset(TheTarget->createMCAsmInfo(*MRI, Triple));
-    Ctx = llvm::make_unique<MCContext>(MAI.get(), MRI.get(), nullptr);
+    Ctx = std::make_unique<MCContext>(MAI.get(), MRI.get(), nullptr);
   }
 
   operator bool() { return Ctx.get(); }
@@ -57,9 +57,7 @@ void verifyEncoding(MCDwarfLineTableParams Params, int LineDelta, int AddrDelta,
   raw_svector_ostream EncodingOS(Buffer);
   MCDwarfLineAddr::Encode(getContext(), Params, LineDelta, AddrDelta,
                           EncodingOS);
-  ArrayRef<uint8_t> Encoding(reinterpret_cast<uint8_t *>(Buffer.data()),
-                             Buffer.size());
-  EXPECT_EQ(ExpectedEncoding, Encoding);
+  EXPECT_EQ(ExpectedEncoding, arrayRefFromStringRef(Buffer));
 }
 
 TEST(DwarfLineTables, TestDefaultParams) {

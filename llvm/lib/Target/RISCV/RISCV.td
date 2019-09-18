@@ -43,6 +43,11 @@ def FeatureStdExtC
 def HasStdExtC : Predicate<"Subtarget->hasStdExtC()">,
                            AssemblerPredicate<"FeatureStdExtC">;
 
+def FeatureRVCHints
+    : SubtargetFeature<"rvc-hints", "EnableRVCHintInstrs", "true",
+                       "Enable RVC Hint Instructions.">;
+def HasRVCHints : Predicate<"Subtarget->enableRVCHintInstrs()">,
+                            AssemblerPredicate<"FeatureRVCHints">;
 
 def Feature64Bit
     : SubtargetFeature<"64bit", "HasRV64", "true", "Implements RV64">;
@@ -54,17 +59,15 @@ def IsRV32 : Predicate<"!Subtarget->is64Bit()">,
 def RV64           : HwMode<"+64bit">;
 def RV32           : HwMode<"-64bit">;
 
+def FeatureRV32E
+    : SubtargetFeature<"e", "IsRV32E", "true",
+                       "Implements RV32E (provides 16 rather than 32 GPRs)">;
+def IsRV32E : Predicate<"Subtarget->isRV32E()">,
+                        AssemblerPredicate<"FeatureRV32E">;
+
 def FeatureRelax
     : SubtargetFeature<"relax", "EnableLinkerRelax", "true",
                        "Enable Linker relaxation.">;
-
-//===----------------------------------------------------------------------===//
-// Registers, calling conventions, instruction descriptions.
-//===----------------------------------------------------------------------===//
-
-include "RISCVRegisterInfo.td"
-include "RISCVCallingConv.td"
-include "RISCVInstrInfo.td"
 
 //===----------------------------------------------------------------------===//
 // Named operands for CSR instructions.
@@ -73,12 +76,22 @@ include "RISCVInstrInfo.td"
 include "RISCVSystemOperands.td"
 
 //===----------------------------------------------------------------------===//
+// Registers, calling conventions, instruction descriptions.
+//===----------------------------------------------------------------------===//
+
+include "RISCVRegisterInfo.td"
+include "RISCVCallingConv.td"
+include "RISCVInstrInfo.td"
+include "RISCVRegisterBanks.td"
+
+//===----------------------------------------------------------------------===//
 // RISC-V processors supported.
 //===----------------------------------------------------------------------===//
 
-def : ProcessorModel<"generic-rv32", NoSchedModel, []>;
+def : ProcessorModel<"generic-rv32", NoSchedModel, [FeatureRVCHints]>;
 
-def : ProcessorModel<"generic-rv64", NoSchedModel, [Feature64Bit]>;
+def : ProcessorModel<"generic-rv64", NoSchedModel, [Feature64Bit,
+                     FeatureRVCHints]>;
 
 //===----------------------------------------------------------------------===//
 // Define the RISC-V target.

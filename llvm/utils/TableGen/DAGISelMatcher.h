@@ -71,6 +71,8 @@ public:
     CheckComplexPat,
     CheckAndImm,
     CheckOrImm,
+    CheckImmAllOnesV,
+    CheckImmAllZerosV,
     CheckFoldableChainNode,
 
     // Node creation/emisssion.
@@ -126,6 +128,8 @@ public:
     case CheckValueType:
     case CheckAndImm:
     case CheckOrImm:
+    case CheckImmAllOnesV:
+    case CheckImmAllZerosV:
     case CheckFoldableChainNode:
       return true;
     }
@@ -753,6 +757,38 @@ private:
   }
 };
 
+/// CheckImmAllOnesVMatcher - This check if the current node is an build vector
+/// of all ones.
+class CheckImmAllOnesVMatcher : public Matcher {
+public:
+  CheckImmAllOnesVMatcher() : Matcher(CheckImmAllOnesV) {}
+
+  static bool classof(const Matcher *N) {
+    return N->getKind() == CheckImmAllOnesV;
+  }
+
+private:
+  void printImpl(raw_ostream &OS, unsigned indent) const override;
+  bool isEqualImpl(const Matcher *M) const override { return true; }
+  bool isContradictoryImpl(const Matcher *M) const override;
+};
+
+/// CheckImmAllZerosVMatcher - This check if the current node is an build vector
+/// of all zeros.
+class CheckImmAllZerosVMatcher : public Matcher {
+public:
+  CheckImmAllZerosVMatcher() : Matcher(CheckImmAllZerosV) {}
+
+  static bool classof(const Matcher *N) {
+    return N->getKind() == CheckImmAllZerosV;
+  }
+
+private:
+  void printImpl(raw_ostream &OS, unsigned indent) const override;
+  bool isEqualImpl(const Matcher *M) const override { return true; }
+  bool isContradictoryImpl(const Matcher *M) const override;
+};
+
 /// CheckFoldableChainNodeMatcher - This checks to see if the current node
 /// (which defines a chain operand) is safe to fold into a larger pattern.
 class CheckFoldableChainNodeMatcher : public Matcher {
@@ -896,13 +932,15 @@ private:
 ///
 class EmitCopyToRegMatcher : public Matcher {
   unsigned SrcSlot; // Value to copy into the physreg.
-  Record *DestPhysReg;
+  const CodeGenRegister *DestPhysReg;
+
 public:
-  EmitCopyToRegMatcher(unsigned srcSlot, Record *destPhysReg)
+  EmitCopyToRegMatcher(unsigned srcSlot,
+                       const CodeGenRegister *destPhysReg)
     : Matcher(EmitCopyToReg), SrcSlot(srcSlot), DestPhysReg(destPhysReg) {}
 
   unsigned getSrcSlot() const { return SrcSlot; }
-  Record *getDestPhysReg() const { return DestPhysReg; }
+  const CodeGenRegister *getDestPhysReg() const { return DestPhysReg; }
 
   static bool classof(const Matcher *N) {
     return N->getKind() == EmitCopyToReg;

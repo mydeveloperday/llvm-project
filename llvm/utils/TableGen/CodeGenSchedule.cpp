@@ -172,8 +172,8 @@ CodeGenSchedModels::CodeGenSchedModels(RecordKeeper &RK,
 
   // Allow Set evaluation to recognize the dags used in InstRW records:
   // (instrs Op1, Op1...)
-  Sets.addOperator("instrs", llvm::make_unique<InstrsOp>());
-  Sets.addOperator("instregex", llvm::make_unique<InstRegexOp>(Target));
+  Sets.addOperator("instrs", std::make_unique<InstrsOp>());
+  Sets.addOperator("instregex", std::make_unique<InstRegexOp>(Target));
 
   // Instantiate a CodeGenProcModel for each SchedMachineModel with the values
   // that are explicitly referenced in tablegen records. Resources associated
@@ -1935,7 +1935,8 @@ void CodeGenSchedModels::checkCompleteness() {
         if (Inst->TheDef->isValueUnset("SchedRW") && !HadCompleteModel) {
           PrintError(Inst->TheDef->getLoc(),
                      "No schedule information for instruction '" +
-                         Inst->TheDef->getName() + "'");
+                         Inst->TheDef->getName() + "' in SchedMachineModel '" +
+                     ProcModel.ModelDef->getName() + "'");
           Complete = false;
         }
         continue;

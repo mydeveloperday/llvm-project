@@ -39,6 +39,10 @@ FormatTokenLexer::FormatTokenLexer(const SourceManager &SourceMgr, FileID ID,
     Macros.insert({&IdentTable.get(ForEachMacro), TT_ForEachMacro});
   for (const std::string &StatementMacro : Style.StatementMacros)
     Macros.insert({&IdentTable.get(StatementMacro), TT_StatementMacro});
+  for (const std::string &TypenameMacro : Style.TypenameMacros)
+    Macros.insert({&IdentTable.get(TypenameMacro), TT_TypenameMacro});
+  for (const std::string &NamespaceMacro : Style.NamespaceMacros)
+    Macros.insert({&IdentTable.get(NamespaceMacro), TT_NamespaceMacro});
 }
 
 ArrayRef<FormatToken *> FormatTokenLexer::lex() {
@@ -68,9 +72,9 @@ void FormatTokenLexer::tryMergePreviousTokens() {
     return;
 
   if (Style.isCSharp()) {
-    if (tryMergeCSharpStringLiteral())
-      return;
     if (tryMergeCSharpKeywordVariables())
+      return;
+    if (tryMergeCSharpVerbatimStringLiteral())
       return;
     if (tryMergeCSharpDoubleQuestion())
       return;
@@ -127,8 +131,7 @@ bool FormatTokenLexer::tryMergeNSStringLiteral() {
     return false;
   auto &At = *(Tokens.end() - 2);
   auto &String = *(Tokens.end() - 1);
-  if (!At->is(tok::at) ||
-      !String->isOneOf(tok::string_literal, tok::verbatim_string_literal))
+  if (!At->is(tok::at) || !String->is(tok::string_literal))
     return false;
   At->Tok.setKind(tok::string_literal);
   At->TokenText = StringRef(At->TokenText.begin(),
@@ -158,9 +161,10 @@ bool FormatTokenLexer::tryMergeJSPrivateIdentifier() {
   return true;
 }
 
-// Search for interpolated string literals $"aaaaa{abc}aaaaa" and mark token
-// as TT_CSharpStringLiteral, and to prevent splitting of $ and ".
-bool FormatTokenLexer::tryMergeCSharpStringLiteral() {
+// Search for verbatim or interpolated string literals @"ABC" or
+// $"aaaaa{abc}aaaaa" i and mark the token as TT_CSharpStringLiteral, and to
+// prevent splitting of @, $ and ".
+bool FormatTokenLexer::tryMergeCSharpVerbatimStringLiteral() {
   if (Tokens.size() < 2)
     return false;
   auto &At = *(Tokens.end() - 2);
@@ -168,14 +172,13 @@ bool FormatTokenLexer::tryMergeCSharpStringLiteral() {
 
   // Look for $"aaaaaa" @"aaaaaa".
   if (!(At->is(tok::at) || At->TokenText == "$") ||
-      !String->isOneOf(tok::string_literal, tok::verbatim_string_literal))
+      !String->is(tok::string_literal))
     return false;
 
-  // Look for $@"aaaaaa"
   if (Tokens.size() >= 2 && At->is(tok::at)) {
     auto &Dollar = *(Tokens.end() - 3);
     if (Dollar->TokenText == "$") {
-      // this looks like $@"aaaaa" so we need to combine all 3
+      // This looks like $@"aaaaa" so we need to combine all 3 tokens.
       Dollar->Tok.setKind(tok::string_literal);
       Dollar->TokenText =
           StringRef(Dollar->TokenText.begin(),
@@ -183,11 +186,12 @@ bool FormatTokenLexer::tryMergeCSharpStringLiteral() {
       Dollar->ColumnWidth += (At->ColumnWidth + String->ColumnWidth);
       Dollar->Type = TT_CSharpStringLiteral;
       Tokens.erase(Tokens.end() - 2);
+      Tokens.erase(Tokens.end() - 1);
       return true;
     }
   }
 
-  // Convert back into just a string_literal
+  // Convert back into just a string_literal.
   At->Tok.setKind(tok::string_literal);
   At->TokenText = StringRef(At->TokenText.begin(),
                             String->TokenText.end() - At->TokenText.begin());
@@ -233,7 +237,7 @@ bool FormatTokenLexer::tryMergeCSharpKeywordVariables() {
   return true;
 }
 
-// in C# merge the Identifier and the ? together  arg?
+// In C# merge the Identifier and the ? together e.g. arg?.
 bool FormatTokenLexer::tryMergeCSharpNullConditionals() {
   if (Tokens.size() < 2)
     return false;
@@ -246,7 +250,6 @@ bool FormatTokenLexer::tryMergeCSharpNullConditionals() {
       StringRef(Identifier->TokenText.begin(),
                 Question->TokenText.end() - Identifier->TokenText.begin());
   Identifier->ColumnWidth += Question->ColumnWidth;
-  Identifier->Type = Identifier->Type;
   Tokens.erase(Tokens.end() - 1);
   return true;
 }

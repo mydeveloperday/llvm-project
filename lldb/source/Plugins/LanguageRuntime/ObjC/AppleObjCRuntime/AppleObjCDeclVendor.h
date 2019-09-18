@@ -10,19 +10,24 @@
 #define liblldb_AppleObjCDeclVendor_h_
 
 #include "lldb/Symbol/ClangASTContext.h"
-#include "lldb/Symbol/DeclVendor.h"
-#include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/lldb-private.h"
+
+#include "Plugins/ExpressionParser/Clang/ClangDeclVendor.h"
+#include "Plugins/LanguageRuntime/ObjC/ObjCLanguageRuntime.h"
 
 namespace lldb_private {
 
 class AppleObjCExternalASTSource;
 
-class AppleObjCDeclVendor : public DeclVendor {
+class AppleObjCDeclVendor : public ClangDeclVendor {
 public:
   AppleObjCDeclVendor(ObjCLanguageRuntime &runtime);
 
-  uint32_t FindDecls(const ConstString &name, bool append, uint32_t max_matches,
+  static bool classof(const DeclVendor *vendor) {
+    return vendor->GetKind() == eAppleObjCDeclVendor;
+  }
+
+  uint32_t FindDecls(ConstString name, bool append, uint32_t max_matches,
                      std::vector<clang::NamedDecl *> &decls) override;
 
   clang::ExternalASTMerger::ImporterSource GetImporterSource() override;

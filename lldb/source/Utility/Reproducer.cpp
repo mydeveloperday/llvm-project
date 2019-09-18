@@ -175,8 +175,8 @@ void Generator::AddProvidersToIndex() {
   index.AppendPathComponent("index.yaml");
 
   std::error_code EC;
-  auto strm = llvm::make_unique<raw_fd_ostream>(index.GetPath(), EC,
-                                                sys::fs::OpenFlags::F_None);
+  auto strm = std::make_unique<raw_fd_ostream>(index.GetPath(), EC,
+                                               sys::fs::OpenFlags::OF_None);
   yaml::Output yout(*strm);
 
   std::vector<std::string> files;
@@ -220,8 +220,112 @@ bool Loader::HasFile(StringRef file) {
   return (it != m_files.end()) && (*it == file);
 }
 
+llvm::Expected<std::unique_ptr<DataRecorder>>
+DataRecorder::Create(const FileSpec &filename) {
+  std::error_code ec;
+  auto recorder = std::make_unique<DataRecorder>(std::move(filename), ec);
+  if (ec)
+    return llvm::errorCodeToError(ec);
+  return std::move(recorder);
+}
+
+DataRecorder *CommandProvider::GetNewDataRecorder() {
+  std::size_t i = m_data_recorders.size() + 1;
+  std::string filename = (llvm::Twine(Info::name) + llvm::Twine("-") +
+                          llvm::Twine(i) + llvm::Twine(".txt"))
+                             .str();
+  auto recorder_or_error =
+      DataRecorder::Create(GetRoot().CopyByAppendingPathComponent(filename));
+  if (!recorder_or_error) {
+    llvm::consumeError(recorder_or_error.takeError());
+    return nullptr;
+  }
+
+  m_data_recorders.push_back(std::move(*recorder_or_error));
+  return m_data_recorders.back().get();
+}
+
+void CommandProvider::Keep() {
+  std::vector<std::string> files;
+  for (auto &recorder : m_data_recorders) {
+    recorder->Stop();
+    files.push_back(recorder->GetFilename().GetPath());
+  }
+
+  FileSpec file = GetRoot().CopyByAppendingPathComponent(Info::file);
+  std::error_code ec;
+  llvm::raw_fd_ostream os(file.GetPath(), ec, llvm::sys::fs::OF_Text);
+  if (ec)
+    return;
+  yaml::Output yout(os);
+  yout << files;
+}
+
+void CommandProvider::Discard() { m_data_recorders.clear(); }
+
+void VersionProvider::Keep() {
+  FileSpec file = GetRoot().CopyByAppendingPathComponent(Info::file);
+  std::error_code ec;
+  llvm::raw_fd_ostream os(file.GetPath(), ec, llvm::sys::fs::OF_Text);
+  if (ec)
+    return;
+  os << m_version << "\n";
+}
+
+llvm::raw_ostream *ProcessGDBRemoteProvider::GetHistoryStream() {
+  FileSpec history_file = GetRoot().CopyByAppendingPathComponent(Info::file);
+
+  std::error_code EC;
+  m_stream_up = std::make_unique<raw_fd_ostream>(history_file.GetPath(), EC,
+                                                 sys::fs::OpenFlags::OF_Text);
+  return m_stream_up.get();
+}
+
+std::unique_ptr<CommandLoader> CommandLoader::Create(Loader *loader) {
+  if (!loader)
+    return {};
+
+  FileSpec file = loader->GetFile<repro::CommandProvider::Info>();
+  if (!file)
+    return {};
+
+  auto error_or_file = llvm::MemoryBuffer::getFile(file.GetPath());
+  if (auto err = error_or_file.getError())
+    return {};
+
+  std::vector<std::string> files;
+  llvm::yaml::Input yin((*error_or_file)->getBuffer());
+  yin >> files;
+
+  if (auto err = yin.error())
+    return {};
+
+  for (auto &file : files) {
+    FileSpec absolute_path =
+        loader->GetRoot().CopyByAppendingPathComponent(file);
+    file = absolute_path.GetPath();
+  }
+
+  return std::make_unique<CommandLoader>(std::move(files));
+}
+
+llvm::Optional<std::string> CommandLoader::GetNextFile() {
+  if (m_index >= m_files.size())
+    return {};
+  return m_files[m_index++];
+}
+
 void ProviderBase::anchor() {}
-char ProviderBase::ID = 0;
+char CommandProvider::ID = 0;
 char FileProvider::ID = 0;
-const char *FileInfo::name = "files";
-const char *FileInfo::file = "files.yaml";
+char ProcessGDBRemoteProvider::ID = 0;
+char ProviderBase::ID = 0;
+char VersionProvider::ID = 0;
+const char *CommandProvider::Info::file = "command-interpreter.yaml";
+const char *CommandProvider::Info::name = "command-interpreter";
+const char *FileProvider::Info::file = "files.yaml";
+const char *FileProvider::Info::name = "files";
+const char *ProcessGDBRemoteProvider::Info::file = "gdb-remote.yaml";
+const char *ProcessGDBRemoteProvider::Info::name = "gdb-remote";
+const char *VersionProvider::Info::file = "version.txt";
+const char *VersionProvider::Info::name = "version";

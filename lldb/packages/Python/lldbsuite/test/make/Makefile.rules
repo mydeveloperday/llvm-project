@@ -28,10 +28,10 @@
 # Uncomment line below for debugging shell commands
 # SHELL = /bin/sh -x
 
-SRCDIR := $(shell dirname $(firstword $(MAKEFILE_LIST)))/
+SRCDIR := $(shell dirname $(firstword $(MAKEFILE_LIST)))
 BUILDDIR := $(shell pwd)
-THIS_FILE_DIR := $(shell dirname $(lastword $(MAKEFILE_LIST)))/
-LLDB_BASE_DIR := $(THIS_FILE_DIR)../../../../../
+THIS_FILE_DIR := $(shell dirname $(lastword $(MAKEFILE_LIST)))
+LLDB_BASE_DIR := $(THIS_FILE_DIR)/../../../../../
 
 #----------------------------------------------------------------------
 # If OS is not defined, use 'uname -s' to determine the OS name.
@@ -88,6 +88,7 @@ ifneq "$(TRIPLE)" ""
 	triple_os_and_version =$(shell echo $(word 3, $(triple_space)) | sed 's/\([a-z]*\)\(.*\)/\1 \2/')
 	TRIPLE_OS =$(word 1, $(triple_os_and_version))
 	TRIPLE_VERSION =$(word 2, $(triple_os_and_version))
+	TRIPLE_ENV =$(word 4, $(triple_space))
 	ifeq "$(TRIPLE_VENDOR)" "apple"
 		ifeq "$(TRIPLE_OS)" "ios"
 			CODESIGN := codesign
@@ -100,11 +101,19 @@ ifneq "$(TRIPLE)" ""
 					endif
 					ARCH_CFLAGS :=-mios-version-min=$(TRIPLE_VERSION) -isysroot "$(SDKROOT)"
 				else
-					SDKROOT = $(shell xcrun --sdk iphonesimulator --show-sdk-path)
+					ifeq "$(TRIPLE_ENV)" "macabi"
+						SDKROOT = $(shell xcrun --sdk macosx --show-sdk-path)
+					else
+						SDKROOT = $(shell xcrun --sdk iphonesimulator --show-sdk-path)
+					endif
 					ifeq "$(TRIPLE_VERSION)" ""
 						TRIPLE_VERSION =$(shell echo $(notdir $(SDKROOT)) | sed -e 's/.*\([0-9]\.[0-9]\).*/\1/')
 					endif
-					ARCH_CFLAGS :=-mios-simulator-version-min=$(TRIPLE_VERSION) -isysroot "$(SDKROOT)"
+					ifeq "$(TRIPLE_ENV)" "macabi"
+						ARCH_CFLAGS :=-mios-version-min=$(TRIPLE_VERSION) -isysroot "$(SDKROOT)"
+					else
+						ARCH_CFLAGS :=-mios-simulator-version-min=$(TRIPLE_VERSION) -isysroot "$(SDKROOT)"
+					endif
 				endif
 			endif
 		endif
@@ -164,6 +173,17 @@ ifeq "$(CC)" "cc"
 	else ifneq "$(shell which gcc)" ""
 		CC = gcc
 	endif
+endif
+
+#----------------------------------------------------------------------
+# Handle SDKROOT on Darwin
+#----------------------------------------------------------------------
+
+ifeq "$(OS)" "Darwin"
+    ifeq "$(SDKROOT)" ""
+        # We haven't otherwise set the SDKROOT, so set it now to macosx
+        SDKROOT := $(shell xcrun --sdk macosx --show-sdk-path)
+    endif
 endif
 
 #----------------------------------------------------------------------
@@ -248,13 +268,25 @@ endif
 DEBUG_INFO_FLAG ?= -g
 
 CFLAGS ?= $(DEBUG_INFO_FLAG) -O0 -fno-builtin
+
+ifeq "$(OS)" "Darwin"
+	ifneq "$(SDKROOT)" ""
+		CFLAGS += -isysroot "$(SDKROOT)"
+	endif
+endif
+
 ifeq "$(OS)" "Darwin"
 	CFLAGS += $(ARCHFLAG) $(ARCH) $(FRAMEWORK_INCLUDES) -I$(LLDB_BASE_DIR)include
 else
 	CFLAGS += $(ARCHFLAG)$(ARCH) $(FRAMEWORK_INCLUDES) -I$(LLDB_BASE_DIR)include
 endif
 
-CFLAGS += -I$(SRCDIR) -include $(THIS_FILE_DIR)test_common.h -I$(THIS_FILE_DIR)
+CFLAGS += -I$(SRCDIR) -I$(THIS_FILE_DIR)
+
+ifndef NO_TEST_COMMON_H
+  CFLAGS += -include $(THIS_FILE_DIR)/test_common.h
+endif
+
 CFLAGS += $(NO_LIMIT_DEBUG_INFO_FLAGS) $(ARCH_CFLAGS) $(CFLAGS_EXTRAS)
 
 # If the OS is Windows, we need to pass -gdwarf to clang, otherwise it will build
@@ -282,7 +314,11 @@ CLANG_MODULE_CACHE_DIR := $(BUILDDIR)/module-cache
 $(warning failed to set the shared clang module cache dir)
 endif
 
-MANDATORY_MODULE_BUILD_CFLAGS := -fmodules -gmodules -fmodules-cache-path=$(CLANG_MODULE_CACHE_DIR)
+MODULE_BASE_FLAGS := -fmodules -gmodules -fmodules-cache-path=$(CLANG_MODULE_CACHE_DIR)
+MANDATORY_MODULE_BUILD_CFLAGS := $(MODULE_BASE_FLAGS) -gmodules
+# Build flags for building with C++ modules.
+# -glldb is necessary for emitting information about what modules were imported.
+MANDATORY_CXXMODULE_BUILD_CFLAGS := $(MODULE_BASE_FLAGS) -fcxx-modules -glldb
 
 ifeq "$(OS)" "Darwin"
 	MANDATORY_MODULE_BUILD_CFLAGS += -fcxx-modules
@@ -297,6 +333,11 @@ CXXFLAGS += -std=c++11 $(CFLAGS) $(ARCH_CXXFLAGS)
 LD = $(CC)
 LDFLAGS ?= $(CFLAGS)
 LDFLAGS += $(LD_EXTRAS) $(ARCH_LDFLAGS)
+ifneq (,$(LLVM_LIBS_DIR))
+	ifeq ($(OS),NetBSD)
+		LDFLAGS += -L$(LLVM_LIBS_DIR) -Wl,-rpath,$(LLVM_LIBS_DIR)
+	endif
+endif
 ifeq (,$(filter $(OS), Windows_NT Android Darwin))
 	ifneq (,$(filter YES,$(ENABLE_THREADS)))
 		LDFLAGS += -pthread

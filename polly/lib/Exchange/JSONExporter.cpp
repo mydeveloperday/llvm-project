@@ -18,18 +18,14 @@
 #include "polly/ScopPass.h"
 #include "polly/Support/ScopLocation.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/RegionInfo.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include "isl/constraint.h"
 #include "isl/map.h"
-#include "isl/printer.h"
 #include "isl/set.h"
-#include "isl/union_map.h"
 #include <memory>
 #include <string>
 #include <system_error>
@@ -182,7 +178,7 @@ static void exportScop(Scop &S) {
 
   // Write to file.
   std::error_code EC;
-  ToolOutputFile F(FileName, EC, llvm::sys::fs::F_Text);
+  ToolOutputFile F(FileName, EC, llvm::sys::fs::OF_Text);
 
   std::string FunctionName = S.getFunction().getName();
   errs() << "Writing JScop '" << S.getNameStr() << "' in function '"

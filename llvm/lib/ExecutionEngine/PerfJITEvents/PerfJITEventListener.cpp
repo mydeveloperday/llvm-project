@@ -26,11 +26,11 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Mutex.h"
-#include "llvm/Support/MutexGuard.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
+#include <mutex>
 
 #include <sys/mman.h>  // mmap()
 #include <sys/types.h> // getpid()
@@ -203,7 +203,7 @@ PerfJITEventListener::PerfJITEventListener() : Pid(::getpid()) {
     return;
   }
 
-  Dumpstream = make_unique<raw_fd_ostream>(DumpFd, true);
+  Dumpstream = std::make_unique<raw_fd_ostream>(DumpFd, true);
 
   LLVMPerfJitHeader Header = {0};
   if (!FillMachine(Header))
@@ -265,16 +265,22 @@ void PerfJITEventListener::notifyObjectLoaded(
       consumeError(AddrOrErr.takeError());
       continue;
     }
-    uint64_t Addr = *AddrOrErr;
     uint64_t Size = P.second;
+    object::SectionedAddress Address;
+    Address.Address = *AddrOrErr;
+
+    uint64_t SectionIndex = object::SectionedAddress::UndefSection;
+    if (auto SectOrErr = Sym.getSection())
+        if (*SectOrErr != Obj.section_end())
+            SectionIndex = SectOrErr.get()->getIndex();
 
     // According to spec debugging info has to come before loading the
     // corresonding code load.
     DILineInfoTable Lines = Context->getLineInfoForAddressRange(
-        Addr, Size, FileLineInfoKind::AbsoluteFilePath);
+        {*AddrOrErr, SectionIndex}, Size, FileLineInfoKind::AbsoluteFilePath);
 
-    NotifyDebug(Addr, Lines);
-    NotifyCode(Name, Addr, Size);
+    NotifyDebug(*AddrOrErr, Lines);
+    NotifyCode(Name, *AddrOrErr, Size);
   }
 
   Dumpstream->flush();
@@ -335,8 +341,8 @@ bool PerfJITEventListener::OpenMarker() {
   //
   // Mapping must be PROT_EXEC to ensure it is captured by perf record
   // even when not using -d option.
-  MarkerAddr = ::mmap(NULL, sys::Process::getPageSize(), PROT_READ | PROT_EXEC,
-                      MAP_PRIVATE, DumpFd, 0);
+  MarkerAddr = ::mmap(NULL, sys::Process::getPageSizeEstimate(),
+                      PROT_READ | PROT_EXEC, MAP_PRIVATE, DumpFd, 0);
 
   if (MarkerAddr == MAP_FAILED) {
     errs() << "could not mmap JIT marker\n";
@@ -349,7 +355,7 @@ void PerfJITEventListener::CloseMarker() {
   if (!MarkerAddr)
     return;
 
-  munmap(MarkerAddr, sys::Process::getPageSize());
+  munmap(MarkerAddr, sys::Process::getPageSizeEstimate());
   MarkerAddr = nullptr;
 }
 
@@ -414,7 +420,7 @@ void PerfJITEventListener::NotifyCode(Expected<llvm::StringRef> &Symbol,
   rec.Tid = get_threadid();
 
   // avoid interspersing output
-  MutexGuard Guard(Mutex);
+  std::lock_guard<sys::Mutex> Guard(Mutex);
 
   rec.CodeIndex = CodeGeneration++; // under lock!
 
@@ -456,7 +462,7 @@ void PerfJITEventListener::NotifyDebug(uint64_t CodeAddr,
   // * char name[n]      : source file name in ASCII, including null termination
 
   // avoid interspersing output
-  MutexGuard Guard(Mutex);
+  std::lock_guard<sys::Mutex> Guard(Mutex);
 
   Dumpstream->write(reinterpret_cast<const char *>(&rec), sizeof(rec));
 

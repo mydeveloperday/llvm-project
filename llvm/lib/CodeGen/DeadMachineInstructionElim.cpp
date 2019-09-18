@@ -75,15 +75,17 @@ bool DeadMachineInstructionElim::isDead(const MachineInstr *MI) const {
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI->getOperand(i);
     if (MO.isReg() && MO.isDef()) {
-      unsigned Reg = MO.getReg();
-      if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+      Register Reg = MO.getReg();
+      if (Register::isPhysicalRegister(Reg)) {
         // Don't delete live physreg defs, or any reserved register defs.
         if (LivePhysRegs.test(Reg) || MRI->isReserved(Reg))
           return false;
       } else {
-        if (!MRI->use_nodbg_empty(Reg))
-          // This def has a non-debug use. Don't delete the instruction!
-          return false;
+        for (const MachineInstr &Use : MRI->use_nodbg_instructions(Reg)) {
+          if (&Use != MI)
+            // This def has a non-debug use. Don't delete the instruction!
+            return false;
+        }
       }
     }
   }
@@ -138,8 +140,8 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
         const MachineOperand &MO = MI->getOperand(i);
         if (MO.isReg() && MO.isDef()) {
-          unsigned Reg = MO.getReg();
-          if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          Register Reg = MO.getReg();
+          if (Register::isPhysicalRegister(Reg)) {
             // Check the subreg set, not the alias set, because a def
             // of a super-register may still be partially live after
             // this def.
@@ -157,8 +159,8 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
         const MachineOperand &MO = MI->getOperand(i);
         if (MO.isReg() && MO.isUse()) {
-          unsigned Reg = MO.getReg();
-          if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          Register Reg = MO.getReg();
+          if (Register::isPhysicalRegister(Reg)) {
             for (MCRegAliasIterator AI(Reg, TRI, true); AI.isValid(); ++AI)
               LivePhysRegs.set(*AI);
           }

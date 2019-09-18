@@ -430,7 +430,7 @@ namespace llvm {
       std::copy(Data.begin(), Data.end(), this->begin());
     }
 
-    OwningArrayRef(OwningArrayRef &&Other) { *this = Other; }
+    OwningArrayRef(OwningArrayRef &&Other) { *this = std::move(Other); }
 
     OwningArrayRef &operator=(OwningArrayRef &&Other) {
       delete[] this->data();
@@ -479,6 +479,12 @@ namespace llvm {
   template<typename T>
   ArrayRef<T> makeArrayRef(const std::vector<T> &Vec) {
     return Vec;
+  }
+
+  /// Construct an ArrayRef from a std::array.
+  template <typename T, std::size_t N>
+  ArrayRef<T> makeArrayRef(const std::array<T, N> &Arr) {
+    return Arr;
   }
 
   /// Construct an ArrayRef from an ArrayRef (no-op) (const)

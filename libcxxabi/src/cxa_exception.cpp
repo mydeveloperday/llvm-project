@@ -6,7 +6,7 @@
 //
 //  
 //  This file implements the "Exception Handling APIs"
-//  http://mentorembedded.github.io/cxx-abi/abi-eh.html
+//  https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html
 //  
 //===----------------------------------------------------------------------===//
 
@@ -14,8 +14,8 @@
 
 #include <exception>        // for std::terminate
 #include <cstring>          // for memset
-#include "cxa_exception.hpp"
-#include "cxa_handlers.hpp"
+#include "cxa_exception.h"
+#include "cxa_handlers.h"
 #include "fallback_malloc.h"
 #include "include/atomic_support.h"
 

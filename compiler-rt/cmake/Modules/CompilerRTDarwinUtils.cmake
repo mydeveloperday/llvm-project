@@ -1,4 +1,5 @@
 include(CMakeParseArguments)
+include(CompilerRTUtils)
 
 # On OS X SDKs can be installed anywhere on the base system and xcode-select can
 # set the default Xcode to use. This function finds the SDKs that are present in
@@ -93,7 +94,8 @@ function(darwin_test_archs os valid_archs)
    
     set(arch_linker_flags "-arch ${arch} ${os_linker_flags}")
     if(TEST_COMPILE_ONLY)
-      try_compile_only(CAN_TARGET_${os}_${arch} -v -arch ${arch} ${DARWIN_${os}_CFLAGS})
+      # `-w` is used to surpress compiler warnings which `try_compile_only()` treats as an error.
+      try_compile_only(CAN_TARGET_${os}_${arch} FLAGS -v -arch ${arch} ${DARWIN_${os}_CFLAGS} -w)
     else()
       set(SAVED_CMAKE_EXE_LINKER_FLAGS ${CMAKE_EXE_LINKER_FLAGS})
       set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${arch_linker_flags}")
@@ -111,7 +113,7 @@ function(darwin_test_archs os valid_archs)
     endif()
   endforeach()
   set(${valid_archs} ${working_archs}
-    CACHE STRING "List of valid architectures for platform ${os}.")
+    CACHE STRING "List of valid architectures for platform ${os}." FORCE)
 endfunction()
 
 # This function checks the host cpusubtype to see if it is post-haswell. Haswell
@@ -249,10 +251,18 @@ function(darwin_lipo_libs name)
       )
     add_custom_target(${name}
       DEPENDS ${LIB_OUTPUT_DIR}/lib${name}.a)
-    add_dependencies(${LIB_PARENT_TARGET} ${name})
-    install(FILES ${LIB_OUTPUT_DIR}/lib${name}.a
-      DESTINATION ${LIB_INSTALL_DIR})
     set_target_properties(${name} PROPERTIES FOLDER "Compiler-RT Misc")
+    add_dependencies(${LIB_PARENT_TARGET} ${name})
+
+    if(CMAKE_CONFIGURATION_TYPES)
+      set(install_component ${LIB_PARENT_TARGET})
+    else()
+      set(install_component ${name})
+    endif()
+    install(FILES ${LIB_OUTPUT_DIR}/lib${name}.a
+      DESTINATION ${LIB_INSTALL_DIR}
+      COMPONENT ${install_component})
+    add_compiler_rt_install_targets(${name} PARENT_TARGET ${LIB_PARENT_TARGET})
   else()
     message(WARNING "Not generating lipo target for ${name} because no input libraries exist.")
   endif()
@@ -273,7 +283,7 @@ macro(darwin_add_builtin_libraries)
                       ../profile/InstrProfilingPlatformDarwin
                       ../profile/InstrProfilingWriter)
   foreach (os ${ARGN})
-    list_intersect(DARWIN_BUILTIN_ARCHS DARWIN_${os}_ARCHS BUILTIN_SUPPORTED_ARCH)
+    list_intersect(DARWIN_BUILTIN_ARCHS DARWIN_${os}_BUILTIN_ARCHS BUILTIN_SUPPORTED_ARCH)
     foreach (arch ${DARWIN_BUILTIN_ARCHS})
       darwin_find_excluded_builtins_list(${arch}_${os}_EXCLUDED_BUILTINS
                               OS ${os}
@@ -401,8 +411,8 @@ macro(darwin_add_embedded_builtin_libraries)
         INCLUDE ${arch}_FUNCTIONS
         ${${arch}_SOURCES})
       if(NOT ${arch}_filtered_sources)
-        message("${arch}_SOURCES: ${${arch}_SOURCES}")
-        message("${arch}_FUNCTIONS: ${${arch}_FUNCTIONS}")
+        message(WARNING "${arch}_SOURCES: ${${arch}_SOURCES}")
+        message(WARNING "${arch}_FUNCTIONS: ${${arch}_FUNCTIONS}")
         message(FATAL_ERROR "Empty filtered sources!")
       endif()
     endforeach()

@@ -34,7 +34,7 @@ looked for.  Let me give you an example:
   TEST(runToolOnCode, CanSyntaxCheckCode) {
     // runToolOnCode returns whether the action was correctly run over the
     // given code.
-    EXPECT_TRUE(runToolOnCode(new clang::SyntaxOnlyAction, "class X {};"));
+    EXPECT_TRUE(runToolOnCode(std::make_unique<clang::SyntaxOnlyAction>(), "class X {};"));
   }
 
 Writing a standalone tool
@@ -187,8 +187,8 @@ Clang tools need their builtin headers and search for them the same way Clang
 does.  Thus, the default location to look for builtin headers is in a path
 ``$(dirname /path/to/tool)/../lib/clang/3.3/include`` relative to the tool
 binary.  This works out-of-the-box for tools running from llvm's toplevel
-binary directory after building clang-headers, or if the tool is running from
-the binary directory of a clang install next to the clang binary.
+binary directory after building clang-resource-headers, or if the tool is
+running from the binary directory of a clang install next to the clang binary.
 
 Tips: if your tool fails to find ``stddef.h`` or similar headers, call the tool
 with ``-v`` and look at the search paths it looks through.

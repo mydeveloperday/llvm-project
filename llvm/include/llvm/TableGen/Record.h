@@ -623,10 +623,11 @@ public:
 
 class CodeInit : public TypedInit {
   StringRef Value;
+  SMLoc Loc;
 
-  explicit CodeInit(StringRef V)
+  explicit CodeInit(StringRef V, const SMLoc &Loc)
       : TypedInit(IK_CodeInit, static_cast<RecTy *>(CodeRecTy::get())),
-        Value(V) {}
+        Value(V), Loc(Loc) {}
 
 public:
   CodeInit(const StringInit &) = delete;
@@ -636,9 +637,10 @@ public:
     return I->getKind() == IK_CodeInit;
   }
 
-  static CodeInit *get(StringRef);
+  static CodeInit *get(StringRef, const SMLoc &Loc);
 
   StringRef getValue() const { return Value; }
+  const SMLoc &getLoc() const { return Loc; }
 
   Init *convertInitializerTo(RecTy *Ty) const override;
 
@@ -798,8 +800,9 @@ public:
 /// !op (X, Y) - Combine two inits.
 class BinOpInit : public OpInit, public FoldingSetNode {
 public:
-  enum BinaryOp : uint8_t { ADD, AND, OR, SHL, SRA, SRL, LISTCONCAT,
-                            STRCONCAT, CONCAT, EQ, NE, LE, LT, GE, GT };
+  enum BinaryOp : uint8_t { ADD, MUL, AND, OR, SHL, SRA, SRL, LISTCONCAT,
+                            LISTSPLAT, STRCONCAT, CONCAT, EQ, NE, LE, LT, GE,
+                            GT };
 
 private:
   Init *LHS, *RHS;
@@ -818,6 +821,8 @@ public:
   static BinOpInit *get(BinaryOp opc, Init *lhs, Init *rhs,
                         RecTy *Type);
   static Init *getStrConcat(Init *lhs, Init *rhs);
+  static Init *getListConcat(TypedInit *lhs, Init *rhs);
+  static Init *getListSplat(TypedInit *lhs, Init *rhs);
 
   void Profile(FoldingSetNodeID &ID) const;
 
@@ -1258,7 +1263,14 @@ class FieldInit : public TypedInit {
 
   FieldInit(Init *R, StringInit *FN)
       : TypedInit(IK_FieldInit, R->getFieldType(FN)), Rec(R), FieldName(FN) {
-    assert(getType() && "FieldInit with non-record type!");
+#ifndef NDEBUG
+    if (!getType()) {
+      llvm::errs() << "In Record = " << Rec->getAsString()
+                   << ", got FieldName = " << *FieldName
+                   << " with non-record type!\n";
+      llvm_unreachable("FieldInit with non-record type!");
+    }
+#endif
   }
 
 public:
@@ -1675,10 +1687,10 @@ raw_ostream &operator<<(raw_ostream &OS, const Record &R);
 
 class RecordKeeper {
   friend class RecordRecTy;
-  using RecordMap = std::map<std::string, std::unique_ptr<Record>>;
+  using RecordMap = std::map<std::string, std::unique_ptr<Record>, std::less<>>;
   RecordMap Classes, Defs;
   FoldingSet<RecordRecTy> RecordTypePool;
-  std::map<std::string, Init *> ExtraGlobals;
+  std::map<std::string, Init *, std::less<>> ExtraGlobals;
   unsigned AnonCounter = 0;
 
 public:

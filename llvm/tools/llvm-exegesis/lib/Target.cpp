@@ -68,22 +68,46 @@ ExegesisTarget::createBenchmarkRunner(InstructionBenchmark::ModeE Mode,
 
 std::unique_ptr<SnippetGenerator>
 ExegesisTarget::createLatencySnippetGenerator(const LLVMState &State) const {
-  return llvm::make_unique<LatencySnippetGenerator>(State);
+  return std::make_unique<LatencySnippetGenerator>(State);
 }
 
 std::unique_ptr<SnippetGenerator>
 ExegesisTarget::createUopsSnippetGenerator(const LLVMState &State) const {
-  return llvm::make_unique<UopsSnippetGenerator>(State);
+  return std::make_unique<UopsSnippetGenerator>(State);
 }
 
 std::unique_ptr<BenchmarkRunner> ExegesisTarget::createLatencyBenchmarkRunner(
     const LLVMState &State, InstructionBenchmark::ModeE Mode) const {
-  return llvm::make_unique<LatencyBenchmarkRunner>(State, Mode);
+  return std::make_unique<LatencyBenchmarkRunner>(State, Mode);
 }
 
 std::unique_ptr<BenchmarkRunner>
 ExegesisTarget::createUopsBenchmarkRunner(const LLVMState &State) const {
-  return llvm::make_unique<UopsBenchmarkRunner>(State);
+  return std::make_unique<UopsBenchmarkRunner>(State);
+}
+
+void ExegesisTarget::randomizeMCOperand(
+    const Instruction &Instr, const Variable &Var,
+    llvm::MCOperand &AssignedValue,
+    const llvm::BitVector &ForbiddenRegs) const {
+  const Operand &Op = Instr.getPrimaryOperand(Var);
+  switch (Op.getExplicitOperandInfo().OperandType) {
+  case llvm::MCOI::OperandType::OPERAND_IMMEDIATE:
+    // FIXME: explore immediate values too.
+    AssignedValue = llvm::MCOperand::createImm(1);
+    break;
+  case llvm::MCOI::OperandType::OPERAND_REGISTER: {
+    assert(Op.isReg());
+    auto AllowedRegs = Op.getRegisterAliasing().sourceBits();
+    assert(AllowedRegs.size() == ForbiddenRegs.size());
+    for (auto I : ForbiddenRegs.set_bits())
+      AllowedRegs.reset(I);
+    AssignedValue = llvm::MCOperand::createReg(randomBit(AllowedRegs));
+    break;
+  }
+  default:
+    break;
+  }
 }
 
 static_assert(std::is_pod<PfmCountersInfo>::value,

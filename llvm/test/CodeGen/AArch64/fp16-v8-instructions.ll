@@ -295,13 +295,14 @@ define <8 x half> @sitofp_i8(<8 x i8> %a) #0 {
 
 define <8 x half> @sitofp_i16(<8 x i16> %a) #0 {
 ; CHECK-LABEL: sitofp_i16:
-; CHECK-NEXT: sshll2 [[LO:v[0-9]+\.4s]], v0.8h, #0
-; CHECK-NEXT: sshll  [[HI:v[0-9]+\.4s]], v0.4h, #0
-; CHECK-DAG: scvtf [[HIF:v[0-9]+\.4s]], [[HI]]
-; CHECK-DAG: scvtf [[LOF:v[0-9]+\.4s]], [[LO]]
-; CHECK-DAG: fcvtn v[[LOREG:[0-9]+]].4h, [[LOF]]
-; CHECK-DAG: fcvtn v0.4h, [[HIF]]
-; CHECK: mov v0.d[1], v[[LOREG]].d[0]
+; CHECK-FP16-NEXT: scvtf v0.8h, v0.8h
+; CHECK-CVT-NEXT:  sshll2 [[LO:v[0-9]+\.4s]], v0.8h, #0
+; CHECK-CVT-NEXT:  sshll  [[HI:v[0-9]+\.4s]], v0.4h, #0
+; CHECK-CVT-DAG:   scvtf [[HIF:v[0-9]+\.4s]], [[HI]]
+; CHECK-CVT-DAG:   scvtf [[LOF:v[0-9]+\.4s]], [[LO]]
+; CHECK-CVT-DAG:   fcvtn v[[LOREG:[0-9]+]].4h, [[LOF]]
+; CHECK-CVT-DAG:   fcvtn v0.4h, [[HIF]]
+; CHECK-CVT-NEXT:  mov v0.d[1], v[[LOREG]].d[0]
   %1 = sitofp <8 x i16> %a to <8 x half>
   ret <8 x half> %1
 }
@@ -347,13 +348,14 @@ define <8 x half> @uitofp_i8(<8 x i8> %a) #0 {
 
 define <8 x half> @uitofp_i16(<8 x i16> %a) #0 {
 ; CHECK-LABEL: uitofp_i16:
-; CHECK-NEXT: ushll2 [[LO:v[0-9]+\.4s]], v0.8h, #0
-; CHECK-NEXT: ushll  [[HI:v[0-9]+\.4s]], v0.4h, #0
-; CHECK-DAG: ucvtf [[HIF:v[0-9]+\.4s]], [[HI]]
-; CHECK-DAG: ucvtf [[LOF:v[0-9]+\.4s]], [[LO]]
-; CHECK-DAG: fcvtn v[[LOREG:[0-9]+]].4h, [[LOF]]
-; CHECK-DAG: fcvtn v0.4h, [[HIF]]
-; CHECK: mov v0.d[1], v[[LOREG]].d[0]
+; CHECK-FP16-NEXT: ucvtf v0.8h, v0.8h
+; CHECK-CVT-NEXT:  ushll2 [[LO:v[0-9]+\.4s]], v0.8h, #0
+; CHECK-CVT-NEXT:  ushll  [[HI:v[0-9]+\.4s]], v0.4h, #0
+; CHECK-CVT-DAG:   ucvtf [[HIF:v[0-9]+\.4s]], [[HI]]
+; CHECK-CVT-DAG:   ucvtf [[LOF:v[0-9]+\.4s]], [[LO]]
+; CHECK-CVT-DAG:   fcvtn v[[LOREG:[0-9]+]].4h, [[LOF]]
+; CHECK-CVT-DAG:   fcvtn v0.4h, [[HIF]]
+; CHECK-CVT-NEXT:  mov v0.d[1], v[[LOREG]].d[0]
   %1 = uitofp <8 x i16> %a to <8 x half>
   ret <8 x half> %1
 }
@@ -393,40 +395,45 @@ define void @test_insert_at_zero(half %a, <8 x half>* %b) #0 {
 
 define <8 x i8> @fptosi_i8(<8 x half> %a) #0 {
 ; CHECK-LABEL: fptosi_i8:
-; CHECK-DAG: fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
-; CHECK-DAG: fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
-; CHECK-DAG: fcvtzs  [[LOF32:v[0-9]+\.4s]], [[LO]]
-; CHECK-DAG: xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
-; CHECK-DAG: fcvtzs  [[HIF32:v[0-9]+\.4s]], [[HI]]
-; CHECK-DAG: xtn2    [[I16]].8h, [[HIF32]]
-; CHECK-NEXT: xtn     v0.8b, [[I16]].8h
-; CHECK-NEXT: ret
+; CHECK-FP16-NEXT: fcvtzs [[LO:v[0-9]+\.8h]], v0.8h
+; CHECK-CVT-DAG:   fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
+; CHECK-CVT-DAG:   fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
+; CHECK-CVT-DAG:   fcvtzs  [[LOF32:v[0-9]+\.4s]], [[LO]]
+; CHECK-CVT-DAG:   xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
+; CHECK-CVT-DAG:   fcvtzs  [[HIF32:v[0-9]+\.4s]], [[HI]]
+; CHECK-CVT-DAG:   xtn2    [[I16]].8h, [[HIF32]]
+; CHECK-CVT-DAG:   xtn     v0.8b, [[I16]].8h
+; CHECK-FP16-NEXT: xtn     v0.8b, [[LO]]
+; CHECK-NEXT:      ret
   %1 = fptosi<8 x half> %a to <8 x i8>
   ret <8 x i8> %1
 }
 
 define <8 x i16> @fptosi_i16(<8 x half> %a) #0 {
 ; CHECK-LABEL: fptosi_i16:
-; CHECK-DAG: fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
-; CHECK-DAG: fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
-; CHECK-DAG: fcvtzs  [[LOF32:v[0-9]+\.4s]], [[LO]]
-; CHECK-DAG: xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
-; CHECK-DAG: fcvtzs  [[HIF32:v[0-9]+\.4s]], [[HI]]
-; CHECK-NEXT: xtn2    [[I16]].8h, [[HIF32]]
-; CHECK-NEXT: ret
+; CHECK-FP16-NEXT: fcvtzs  v0.8h, v0.8h
+; CHECK-CVT_DAG:   fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
+; CHECK-CVT_DAG:   fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
+; CHECK-CVT_DAG:   fcvtzs  [[LOF32:v[0-9]+\.4s]], [[LO]]
+; CHECK-CVT_DAG:   xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
+; CHECK-CVT_DAG:   fcvtzs  [[HIF32:v[0-9]+\.4s]], [[HI]]
+; CHECK-CVT_DAG:   xtn2    [[I16]].8h, [[HIF32]]
+; CHECK-COMMON_NEXT:      ret
   %1 = fptosi<8 x half> %a to <8 x i16>
   ret <8 x i16> %1
 }
 
 define <8 x i8> @fptoui_i8(<8 x half> %a) #0 {
 ; CHECK-LABEL: fptoui_i8:
-; CHECK-DAG: fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
-; CHECK-DAG: fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
-; CHECK-DAG: fcvtzu  [[LOF32:v[0-9]+\.4s]], [[LO]]
-; CHECK-DAG: xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
-; CHECK-DAG: fcvtzu  [[HIF32:v[0-9]+\.4s]], [[HI]]
-; CHECK-DAG: xtn2    [[I16]].8h, [[HIF32]]
-; CHECK-NEXT: xtn     v0.8b, [[I16]].8h
+; CHECK-FP16-NEXT: fcvtzu [[LO:v[0-9]+\.8h]], v0.8h
+; CHECK-CVT-DAG:   fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
+; CHECK-CVT-DAG:   fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
+; CHECK-CVT-DAG:   fcvtzu  [[LOF32:v[0-9]+\.4s]], [[LO]]
+; CHECK-CVT-DAG:   xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
+; CHECK-CVT-DAG:   fcvtzu  [[HIF32:v[0-9]+\.4s]], [[HI]]
+; CHECK-CVT-DAG:   xtn2    [[I16]].8h, [[HIF32]]
+; CHECK-CVT-DAG:   xtn     v0.8b, [[I16]].8h
+; CHECK-FP16-NEXT: xtn     v0.8b, [[LO]]
 ; CHECK-NEXT: ret
   %1 = fptoui<8 x half> %a to <8 x i8>
   ret <8 x i8> %1
@@ -434,13 +441,14 @@ define <8 x i8> @fptoui_i8(<8 x half> %a) #0 {
 
 define <8 x i16> @fptoui_i16(<8 x half> %a) #0 {
 ; CHECK-LABEL: fptoui_i16:
-; CHECK-DAG: fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
-; CHECK-DAG: fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
-; CHECK-DAG: fcvtzu  [[LOF32:v[0-9]+\.4s]], [[LO]]
-; CHECK-DAG: xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
-; CHECK-DAG: fcvtzu  [[HIF32:v[0-9]+\.4s]], [[HI]]
-; CHECK-NEXT: xtn2    [[I16]].8h, [[HIF32]]
-; CHECK-NEXT: ret
+; CHECK-FP16-NEXT: fcvtzu  v0.8h, v0.8h
+; CHECK-CVT-DAG:   fcvtl   [[LO:v[0-9]+\.4s]], v0.4h
+; CHECK-CVT-DAG:   fcvtl2  [[HI:v[0-9]+\.4s]], v0.8h
+; CHECK-CVT-DAG:   fcvtzu  [[LOF32:v[0-9]+\.4s]], [[LO]]
+; CHECK-CVT-DAG:   xtn     [[I16:v[0-9]+]].4h, [[LOF32]]
+; CHECK-CVT-DAG:   fcvtzu  [[HIF32:v[0-9]+\.4s]], [[HI]]
+; CHECK-CVT-DAG:   xtn2    [[I16]].8h, [[HIF32]]
+; CHECK-NEXT:      ret
   %1 = fptoui<8 x half> %a to <8 x i16>
   ret <8 x i16> %1
 }

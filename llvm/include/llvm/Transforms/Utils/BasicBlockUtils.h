@@ -62,6 +62,12 @@ void DeleteDeadBlocks(ArrayRef <BasicBlock *> BBs,
                       DomTreeUpdater *DTU = nullptr,
                       bool KeepOneInputPHIs = false);
 
+/// Delete all basic blocks from \p F that are not reachable from its entry
+/// node. If \p KeepOneInputPHIs is true, one-input Phis in successors of
+/// blocks being deleted will be preserved.
+bool EliminateUnreachableBlocks(Function &F, DomTreeUpdater *DTU = nullptr,
+                                bool KeepOneInputPHIs = false);
+
 /// We know that BB has one predecessor. If there are any single-entry PHI nodes
 /// in it, fold them away. This handles the case when all entries to the PHI
 /// nodes in a block are guaranteed equal, such as when the block has exactly
@@ -110,6 +116,7 @@ struct CriticalEdgeSplittingOptions {
   bool MergeIdenticalEdges = false;
   bool KeepOneInputPHIs = false;
   bool PreserveLCSSA = false;
+  bool IgnoreUnreachableDests = false;
 
   CriticalEdgeSplittingOptions(DominatorTree *DT = nullptr,
                                LoopInfo *LI = nullptr,
@@ -129,6 +136,11 @@ struct CriticalEdgeSplittingOptions {
 
   CriticalEdgeSplittingOptions &setPreserveLCSSA() {
     PreserveLCSSA = true;
+    return *this;
+  }
+
+  CriticalEdgeSplittingOptions &setIgnoreUnreachableDests() {
+    IgnoreUnreachableDests = true;
     return *this;
   }
 };
@@ -210,7 +222,8 @@ BasicBlock *SplitEdge(BasicBlock *From, BasicBlock *To,
 /// info is updated.
 BasicBlock *SplitBlock(BasicBlock *Old, Instruction *SplitPt,
                        DominatorTree *DT = nullptr, LoopInfo *LI = nullptr,
-                       MemorySSAUpdater *MSSAU = nullptr);
+                       MemorySSAUpdater *MSSAU = nullptr,
+                       const Twine &BBName = "");
 
 /// This method introduces at least one new basic block into the function and
 /// moves some of the predecessors of BB to be predecessors of the new block.

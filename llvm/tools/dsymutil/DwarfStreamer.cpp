@@ -31,7 +31,11 @@ static Optional<object::SectionRef>
 getSectionByName(const object::ObjectFile &Obj, StringRef SecName) {
   for (const object::SectionRef &Section : Obj.sections()) {
     StringRef SectionName;
-    Section.getName(SectionName);
+    if (Expected<StringRef> NameOrErr = Section.getName())
+      SectionName = *NameOrErr;
+    else
+      consumeError(NameOrErr.takeError());
+
     SectionName = SectionName.substr(SectionName.find_first_not_of("._"));
     if (SectionName != SecName)
       continue;
@@ -87,7 +91,7 @@ bool DwarfStreamer::init(Triple TheTriple) {
     MIP = TheTarget->createMCInstPrinter(TheTriple, MAI->getAssemblerDialect(),
                                          *MAI, *MII, *MRI);
     MS = TheTarget->createAsmStreamer(
-        *MC, llvm::make_unique<formatted_raw_ostream>(OutFile), true, true, MIP,
+        *MC, std::make_unique<formatted_raw_ostream>(OutFile), true, true, MIP,
         std::unique_ptr<MCCodeEmitter>(MCE), std::unique_ptr<MCAsmBackend>(MAB),
         true);
     break;
@@ -256,7 +260,7 @@ void DwarfStreamer::emitAppleTypes(
 /// Emit the swift_ast section stored in \p Buffers.
 void DwarfStreamer::emitSwiftAST(StringRef Buffer) {
   MCSection *SwiftASTSection = MOFI->getDwarfSwiftASTSection();
-  SwiftASTSection->setAlignment(1 << 5);
+  SwiftASTSection->setAlignment(llvm::Align(32));
   MS->SwitchSection(SwiftASTSection);
   MS->EmitBytes(Buffer);
 }
@@ -335,7 +339,7 @@ void DwarfStreamer::emitUnitRangesEntries(CompileUnit &Unit,
         sizeof(int8_t);   // Segment Size (in bytes)
 
     unsigned TupleSize = AddressSize * 2;
-    unsigned Padding = OffsetToAlignment(HeaderSize, TupleSize);
+    unsigned Padding = offsetToAlignment(HeaderSize, llvm::Align(TupleSize));
 
     Asm->EmitLabelDifference(EndLabel, BeginLabel, 4); // Arange length
     Asm->OutStreamer->EmitLabel(BeginLabel);
@@ -384,8 +388,9 @@ void DwarfStreamer::emitUnitRangesEntries(CompileUnit &Unit,
 
 /// Emit location lists for \p Unit and update attributes to point to the new
 /// entries.
-void DwarfStreamer::emitLocationsForUnit(const CompileUnit &Unit,
-                                         DWARFContext &Dwarf) {
+void DwarfStreamer::emitLocationsForUnit(
+    const CompileUnit &Unit, DWARFContext &Dwarf,
+    std::function<void(StringRef, SmallVectorImpl<uint8_t> &)> ProcessExpr) {
   const auto &Attributes = Unit.getLocationAttributes();
 
   if (Attributes.empty())
@@ -402,8 +407,9 @@ void DwarfStreamer::emitLocationsForUnit(const CompileUnit &Unit,
   if (auto OrigLowPc = dwarf::toAddress(OrigUnitDie.find(dwarf::DW_AT_low_pc)))
     UnitPcOffset = int64_t(*OrigLowPc) - Unit.getLowPc();
 
+  SmallVector<uint8_t, 32> Buffer;
   for (const auto &Attr : Attributes) {
-    uint32_t Offset = Attr.first.get();
+    uint64_t Offset = Attr.first.get();
     Attr.first.set(LocSectionSize);
     // This is the quantity to add to the old location address to get
     // the correct address for the new one.
@@ -421,9 +427,13 @@ void DwarfStreamer::emitLocationsForUnit(const CompileUnit &Unit,
       Asm->OutStreamer->EmitIntValue(High + LocPcOffset, AddressSize);
       uint64_t Length = Data.getU16(&Offset);
       Asm->OutStreamer->EmitIntValue(Length, 2);
-      // Just copy the bytes over.
+      // Copy the bytes into to the buffer, process them, emit them.
+      Buffer.reserve(Length);
+      Buffer.resize(0);
+      StringRef Input = InputSec.Data.substr(Offset, Length);
+      ProcessExpr(Input, Buffer);
       Asm->OutStreamer->EmitBytes(
-          StringRef(InputSec.Data.substr(Offset, Length)));
+          StringRef((const char *)Buffer.data(), Length));
       Offset += Length;
       LocSectionSize += Length + 2;
     }
@@ -578,8 +588,7 @@ void DwarfStreamer::emitLineTableForUnit(MCDwarfLineTableParams Params,
 
 /// Copy the debug_line over to the updated binary while unobfuscating the file
 /// names and directories.
-void DwarfStreamer::translateLineTable(DataExtractor Data, uint32_t Offset,
-                                       LinkOptions &Options) {
+void DwarfStreamer::translateLineTable(DataExtractor Data, uint64_t Offset) {
   MS->SwitchSection(MC->getObjectFileInfo()->getDwarfLineSection());
   StringRef Contents = Data.getData();
 
@@ -587,7 +596,7 @@ void DwarfStreamer::translateLineTable(DataExtractor Data, uint32_t Offset,
   // length fields that will need to be updated when we change the length of
   // the files and directories in there.
   unsigned UnitLength = Data.getU32(&Offset);
-  unsigned UnitEnd = Offset + UnitLength;
+  uint64_t UnitEnd = Offset + UnitLength;
   MCSymbol *BeginLabel = MC->createTempSymbol();
   MCSymbol *EndLabel = MC->createTempSymbol();
   unsigned Version = Data.getU16(&Offset);
@@ -610,7 +619,7 @@ void DwarfStreamer::translateLineTable(DataExtractor Data, uint32_t Offset,
   Offset += 4;
   LineSectionSize += 4;
 
-  uint32_t AfterHeaderLengthOffset = Offset;
+  uint64_t AfterHeaderLengthOffset = Offset;
   // Skip to the directories.
   Offset += (Version >= 4) ? 5 : 4;
   unsigned OpcodeBase = Data.getU8(&Offset);
@@ -640,7 +649,7 @@ void DwarfStreamer::translateLineTable(DataExtractor Data, uint32_t Offset,
     Asm->emitInt8(0);
     LineSectionSize += Translated.size() + 1;
 
-    uint32_t OffsetBeforeLEBs = Offset;
+    uint64_t OffsetBeforeLEBs = Offset;
     Asm->EmitULEB128(Data.getULEB128(&Offset));
     Asm->EmitULEB128(Data.getULEB128(&Offset));
     Asm->EmitULEB128(Data.getULEB128(&Offset));
@@ -661,10 +670,12 @@ void DwarfStreamer::translateLineTable(DataExtractor Data, uint32_t Offset,
 
 static void emitSectionContents(const object::ObjectFile &Obj,
                                 StringRef SecName, MCStreamer *MS) {
-  StringRef Contents;
-  if (auto Sec = getSectionByName(Obj, SecName))
-    if (!Sec->getContents(Contents))
-      MS->EmitBytes(Contents);
+  if (auto Sec = getSectionByName(Obj, SecName)) {
+    if (Expected<StringRef> E = Sec->getContents())
+      MS->EmitBytes(*E);
+    else
+      consumeError(E.takeError());
+  }
 }
 
 void DwarfStreamer::copyInvariantDebugSection(const object::ObjectFile &Obj) {

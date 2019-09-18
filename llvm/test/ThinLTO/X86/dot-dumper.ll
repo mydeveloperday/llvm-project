@@ -23,10 +23,9 @@
 ; PERMODULE-NEXT:    M0_[[MAIN_ALIAS:[0-9]+]] [style="dotted,filled",shape="box",label="main_alias",fillcolor="red"]; // alias, dead
 ; PERMODULE-NEXT:    M0_[[MAIN:[0-9]+]] [shape="record",label="main|extern (inst: 4, ffl: 00000)}",fillcolor="red"]; // function, dead
 ; PERMODULE-NEXT:    // Edges:
+; PERMODULE-NEXT:    M0_[[MAIN_ALIAS]] -> M0_[[MAIN]] [style=dotted]; // alias
 ; PERMODULE-NEXT:  }
 ; PERMODULE-NEXT:  // Cross-module edges:
-; PERMODULE-NEXT:  0 [label="@0"]; // defined externally
-; PERMODULE-NEXT:  M0_[[MAIN_ALIAS]] -> 0 [style=dotted]; // alias
 ; PERMODULE-NEXT:  [[A:[0-9]+]] [label="A"]; // defined externally
 ; PERMODULE-NEXT:  M0_[[MAIN]] -> [[A]] [style=dashed,color=forestgreen]; // const-ref
 ; PERMODULE-NEXT:  [[FOO:[0-9]+]] [label="foo"]; // defined externally
@@ -64,7 +63,7 @@
 ; COMBINED-NEXT:  M0_[[MAIN]] -> M1_[[FOO]] // call (hotness : Unknown)
 ; COMBINED-NEXT: }
 
-target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
 @A = external local_unnamed_addr global i32, align 4

@@ -38,6 +38,7 @@ void StringTableBuilder::initSize() {
     // Start the table with a NUL byte.
     Size = 1;
     break;
+  case XCOFF:
   case WinCOFF:
     // Make room to write the table size later.
     Size = 4;
@@ -67,9 +68,12 @@ void StringTableBuilder::write(uint8_t *Buf) const {
     if (!Data.empty())
       memcpy(Buf + P.second, Data.data(), Data.size());
   }
-  if (K != WinCOFF)
-    return;
-  support::endian::write32le(Buf, Size);
+  // The COFF formats store the size of the string table in the first 4 bytes.
+  // For Windows, the format is little-endian; for AIX, it is big-endian.
+  if (K == WinCOFF)
+    support::endian::write32le(Buf, Size);
+  else if (K == XCOFF)
+    support::endian::write32be(Buf, Size);
 }
 
 // Returns the character at Pos from end of a string.
@@ -159,6 +163,13 @@ void StringTableBuilder::finalizeStringTable(bool Optimize) {
 
   if (K == MachO)
     Size = alignTo(Size, 4); // Pad to multiple of 4.
+
+  // The first byte in an ELF string table must be null, according to the ELF
+  // specification. In 'initSize()' we reserved the first byte to hold null for
+  // this purpose and here we actually add the string to allow 'getOffset()' to
+  // be called on an empty string.
+  if (K == ELF)
+    StringIndexMap[CachedHashStringRef("")] = 0;
 }
 
 void StringTableBuilder::clear() {

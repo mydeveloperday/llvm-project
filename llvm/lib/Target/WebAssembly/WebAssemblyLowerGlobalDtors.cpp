@@ -61,7 +61,7 @@ bool LowerGlobalDtors::runOnModule(Module &M) {
   LLVM_DEBUG(dbgs() << "********** Lower Global Destructors **********\n");
 
   GlobalVariable *GV = M.getGlobalVariable("llvm.global_dtors");
-  if (!GV)
+  if (!GV || !GV->hasInitializer())
     return false;
 
   const ConstantArray *InitList = dyn_cast<ConstantArray>(GV->getInitializer());
@@ -94,7 +94,7 @@ bool LowerGlobalDtors::runOnModule(Module &M) {
       break; // Found a null terminator, skip the rest.
 
     Constant *Associated = CS->getOperand(2);
-    Associated = cast<Constant>(Associated->stripPointerCastsNoFollowAliases());
+    Associated = cast<Constant>(Associated->stripPointerCasts());
 
     DtorFuncs[PriorityValue][Associated].push_back(DtorFunc);
   }

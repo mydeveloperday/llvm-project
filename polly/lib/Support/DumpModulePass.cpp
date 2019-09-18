@@ -11,16 +11,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Support/DumpModulePass.h"
-
-#include "polly/Options.h"
-#include "llvm/IR/LegacyPassManagers.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include <string.h>
+
 #define DEBUG_TYPE "polly-dump-module"
 
 using namespace llvm;
@@ -66,7 +63,7 @@ public:
 
     std::unique_ptr<ToolOutputFile> Out;
     std::error_code EC;
-    Out.reset(new ToolOutputFile(Dumpfile, EC, sys::fs::F_None));
+    Out.reset(new ToolOutputFile(Dumpfile, EC, sys::fs::OF_None));
     if (EC) {
       errs() << EC.message() << '\n';
       return false;

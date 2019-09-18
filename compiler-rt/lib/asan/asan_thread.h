@@ -8,7 +8,7 @@
 //
 // This file is a part of AddressSanitizer, an address sanity checker.
 //
-// ASan-private header for asan_thread.cc.
+// ASan-private header for asan_thread.cpp.
 //===----------------------------------------------------------------------===//
 
 #ifndef ASAN_THREAD_H
@@ -168,18 +168,6 @@ class AsanThread {
   AsanStats stats_;
   bool unwinding_;
   uptr extra_spill_area_;
-};
-
-// ScopedUnwinding is a scope for stacktracing member of a context
-class ScopedUnwinding {
- public:
-  explicit ScopedUnwinding(AsanThread *t) : thread(t) {
-    t->setUnwinding(true);
-  }
-  ~ScopedUnwinding() { thread->setUnwinding(false); }
-
- private:
-  AsanThread *thread;
 };
 
 // Returns a single instance of registry.

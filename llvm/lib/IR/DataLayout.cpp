@@ -182,8 +182,10 @@ void DataLayout::reset(StringRef Desc) {
   LayoutMap = nullptr;
   BigEndian = false;
   AllocaAddrSpace = 0;
-  StackNaturalAlign = 0;
+  StackNaturalAlign.reset();
   ProgramAddrSpace = 0;
+  FunctionPtrAlign.reset();
+  TheFunctionPtrAlignType = FunctionPtrAlignType::Independent;
   ManglingMode = MM_None;
   NonIntegralAddressSpaces.clear();
 
@@ -376,7 +378,29 @@ void DataLayout::parseSpecifier(StringRef Desc) {
       }
       break;
     case 'S': { // Stack natural alignment.
-      StackNaturalAlign = inBytes(getInt(Tok));
+      uint64_t Alignment = inBytes(getInt(Tok));
+      if (Alignment != 0 && !llvm::isPowerOf2_64(Alignment))
+        report_fatal_error("Alignment is neither 0 nor a power of 2");
+      StackNaturalAlign = MaybeAlign(Alignment);
+      break;
+    }
+    case 'F': {
+      switch (Tok.front()) {
+      case 'i':
+        TheFunctionPtrAlignType = FunctionPtrAlignType::Independent;
+        break;
+      case 'n':
+        TheFunctionPtrAlignType = FunctionPtrAlignType::MultipleOfFunctionAlign;
+        break;
+      default:
+        report_fatal_error("Unknown function pointer alignment type in "
+                           "datalayout string");
+      }
+      Tok = Tok.substr(1);
+      uint64_t Alignment = inBytes(getInt(Tok));
+      if (Alignment != 0 && !llvm::isPowerOf2_64(Alignment))
+        report_fatal_error("Alignment is neither 0 nor a power of 2");
+      FunctionPtrAlign = MaybeAlign(Alignment);
       break;
     }
     case 'P': { // Function address space.
@@ -432,6 +456,8 @@ bool DataLayout::operator==(const DataLayout &Other) const {
              AllocaAddrSpace == Other.AllocaAddrSpace &&
              StackNaturalAlign == Other.StackNaturalAlign &&
              ProgramAddrSpace == Other.ProgramAddrSpace &&
+             FunctionPtrAlign == Other.FunctionPtrAlign &&
+             TheFunctionPtrAlignType == Other.TheFunctionPtrAlignType &&
              ManglingMode == Other.ManglingMode &&
              LegalIntWidths == Other.LegalIntWidths &&
              Alignments == Other.Alignments && Pointers == Other.Pointers;
@@ -443,12 +469,9 @@ DataLayout::AlignmentsTy::iterator
 DataLayout::findAlignmentLowerBound(AlignTypeEnum AlignType,
                                     uint32_t BitWidth) {
   auto Pair = std::make_pair((unsigned)AlignType, BitWidth);
-  return std::lower_bound(Alignments.begin(), Alignments.end(), Pair,
-                          [](const LayoutAlignElem &LHS,
-                             const std::pair<unsigned, uint32_t> &RHS) {
-                            return std::tie(LHS.AlignType, LHS.TypeBitWidth) <
-                                   std::tie(RHS.first, RHS.second);
-                          });
+  return partition_point(Alignments, [=](const LayoutAlignElem &E) {
+    return std::make_pair(E.AlignType, E.TypeBitWidth) < Pair;
+  });
 }
 
 void
@@ -738,12 +761,6 @@ unsigned DataLayout::getABIIntegerTypeAlignment(unsigned BitWidth) const {
 
 unsigned DataLayout::getPrefTypeAlignment(Type *Ty) const {
   return getAlignment(Ty, false);
-}
-
-unsigned DataLayout::getPreferredTypeAlignmentShift(Type *Ty) const {
-  unsigned Align = getPrefTypeAlignment(Ty);
-  assert(!(Align & (Align-1)) && "Alignment is not a power of two!");
-  return Log2_32(Align);
 }
 
 IntegerType *DataLayout::getIntPtrType(LLVMContext &C,

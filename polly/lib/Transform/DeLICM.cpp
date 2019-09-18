@@ -15,13 +15,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/DeLICM.h"
+#include "polly/LinkAllPasses.h"
 #include "polly/Options.h"
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
+#include "polly/Support/GICHelper.h"
 #include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/ZoneAlgo.h"
 #include "llvm/ADT/Statistic.h"
+
 #define DEBUG_TYPE "polly-delicm"
 
 using namespace polly;
@@ -897,8 +900,9 @@ private:
     }
 
     //  { DomainRead[] -> Scatter[] }
-    auto PerPHIWriteScatter =
-        isl::map::from_union_map(PerPHIWrites.apply_range(Schedule));
+    isl::union_map PerPHIWriteScatterUmap = PerPHIWrites.apply_range(Schedule);
+    isl::map PerPHIWriteScatter =
+        singleton(PerPHIWriteScatterUmap, PHISched.get_space());
 
     // { DomainRead[] -> Zone[] }
     auto Lifetime = betweenScatter(PerPHIWriteScatter, PHISched, false, true);
@@ -1354,7 +1358,7 @@ private:
 
   void collapseToUnused(Scop &S) {
     auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    Impl = make_unique<DeLICMImpl>(&S, &LI);
+    Impl = std::make_unique<DeLICMImpl>(&S, &LI);
 
     if (!Impl->computeZone()) {
       LLVM_DEBUG(dbgs() << "Abort because cannot reliably compute lifetimes\n");

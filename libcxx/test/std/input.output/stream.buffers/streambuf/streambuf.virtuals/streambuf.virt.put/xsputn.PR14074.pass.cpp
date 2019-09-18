@@ -23,6 +23,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include "test_macros.h"
 #include "platform_support.h"
 
 
@@ -34,6 +35,7 @@ static std::size_t count_bytes(char const* filename) {
     std::size_t count = 0;
     while (std::fgetc(f) != EOF)
         ++count;
+    std::fclose(f);
     return count;
 }
 

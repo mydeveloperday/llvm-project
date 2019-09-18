@@ -735,7 +735,7 @@ static void checkARCPropertyImpl(Sema &S, SourceLocation propertyImplLoc,
     return;
 
   // If the ivar is private, and it's implicitly __unsafe_unretained
-  // becaues of its type, then pretend it was actually implicitly
+  // because of its type, then pretend it was actually implicitly
   // __strong.  This is only sound because we're processing the
   // property implementation before parsing any method bodies.
   if (ivarLifetime == Qualifiers::OCL_ExplicitNone &&
@@ -1288,7 +1288,7 @@ Decl *Sema::ActOnPropertyImplDecl(Scope *S,
 
       Ivar = ObjCIvarDecl::Create(Context, ClassImpDecl,
                                   PropertyIvarLoc,PropertyIvarLoc, PropertyIvar,
-                                  PropertyIvarType, /*Dinfo=*/nullptr,
+                                  PropertyIvarType, /*TInfo=*/nullptr,
                                   ObjCIvarDecl::Private,
                                   (Expr *)nullptr, true);
       if (RequireNonAbstractType(PropertyIvarLoc,
@@ -1942,11 +1942,10 @@ static void DiagnoseUnimplementedAccessor(
     llvm::SmallPtrSet<const ObjCMethodDecl *, 8> &SMap) {
   // Check to see if we have a corresponding selector in SMap and with the
   // right method type.
-  auto I = std::find_if(SMap.begin(), SMap.end(),
-    [&](const ObjCMethodDecl *x) {
-      return x->getSelector() == Method &&
-             x->isClassMethod() == Prop->isClassProperty();
-    });
+  auto I = llvm::find_if(SMap, [&](const ObjCMethodDecl *x) {
+    return x->getSelector() == Method &&
+           x->isClassMethod() == Prop->isClassProperty();
+  });
   // When reporting on missing property setter/getter implementation in
   // categories, do not report when they are declared in primary class,
   // class's protocol, or one of it super classes. This is because,
@@ -2280,9 +2279,18 @@ void Sema::DiagnoseMissingDesignatedInitOverrides(
          I = DesignatedInits.begin(), E = DesignatedInits.end(); I != E; ++I) {
     const ObjCMethodDecl *MD = *I;
     if (!InitSelSet.count(MD->getSelector())) {
+      // Don't emit a diagnostic if the overriding method in the subclass is
+      // marked as unavailable.
       bool Ignore = false;
       if (auto *IMD = IFD->getInstanceMethod(MD->getSelector())) {
         Ignore = IMD->isUnavailable();
+      } else {
+        // Check the methods declared in the class extensions too.
+        for (auto *Ext : IFD->visible_extensions())
+          if (auto *IMD = Ext->getInstanceMethod(MD->getSelector())) {
+            Ignore = IMD->isUnavailable();
+            break;
+          }
       }
       if (!Ignore) {
         Diag(ImplD->getLocation(),
@@ -2411,9 +2419,9 @@ void Sema::ProcessPropertyDecl(ObjCPropertyDecl *property) {
         ObjCReturnsInnerPointerAttr::CreateImplicit(Context, Loc));
 
     if (const SectionAttr *SA = property->getAttr<SectionAttr>())
-      GetterMethod->addAttr(
-          SectionAttr::CreateImplicit(Context, SectionAttr::GNU_section,
-                                      SA->getName(), Loc));
+      GetterMethod->addAttr(SectionAttr::CreateImplicit(
+          Context, SA->getName(), Loc, AttributeCommonInfo::AS_GNU,
+          SectionAttr::GNU_section));
 
     if (getLangOpts().ObjCAutoRefCount)
       CheckARCMethodDecl(GetterMethod);
@@ -2477,9 +2485,9 @@ void Sema::ProcessPropertyDecl(ObjCPropertyDecl *property) {
 
       CD->addDecl(SetterMethod);
       if (const SectionAttr *SA = property->getAttr<SectionAttr>())
-        SetterMethod->addAttr(
-            SectionAttr::CreateImplicit(Context, SectionAttr::GNU_section,
-                                        SA->getName(), Loc));
+        SetterMethod->addAttr(SectionAttr::CreateImplicit(
+            Context, SA->getName(), Loc, AttributeCommonInfo::AS_GNU,
+            SectionAttr::GNU_section));
       // It's possible for the user to have set a very odd custom
       // setter selector that causes it to have a method family.
       if (getLangOpts().ObjCAutoRefCount)

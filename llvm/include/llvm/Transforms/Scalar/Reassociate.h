@@ -82,7 +82,14 @@ protected:
   static const unsigned GlobalReassociateLimit = 10;
   static const unsigned NumBinaryOps =
       Instruction::BinaryOpsEnd - Instruction::BinaryOpsBegin;
-  DenseMap<std::pair<Value *, Value *>, unsigned> PairMap[NumBinaryOps];
+
+  struct PairMapValue {
+    WeakVH Value1;
+    WeakVH Value2;
+    unsigned Score;
+    bool isValid() const { return Value1 && Value2; }
+  };
+  DenseMap<std::pair<Value *, Value *>, PairMapValue> PairMap[NumBinaryOps];
 
   bool MadeChange;
 
@@ -115,7 +122,9 @@ private:
   void EraseInst(Instruction *I);
   void RecursivelyEraseDeadInsts(Instruction *I, OrderedSet &Insts);
   void OptimizeInst(Instruction *I);
-  Instruction *canonicalizeNegConstExpr(Instruction *I);
+  Instruction *canonicalizeNegFPConstantsForOp(Instruction *I, Instruction *Op,
+                                               Value *OtherOp);
+  Instruction *canonicalizeNegFPConstants(Instruction *I);
   void BuildPairMap(ReversePostOrderTraversal<Function *> &RPOT);
 };
 

@@ -1479,6 +1479,9 @@ TEST_F(FormatTestJS, TypeAnnotations) {
       "                    .someFunction(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);");
   verifyFormat("const xIsALongIdent:\n""    YJustBarelyFitsLinex[];",
       getGoogleJSStyleWithColumns(20));
+  verifyFormat("const x = {\n"
+               "  y: 1\n"
+               "} as const;");
 }
 
 TEST_F(FormatTestJS, UnionIntersectionTypes) {
@@ -1962,6 +1965,12 @@ TEST_F(FormatTestJS, NestedTemplateStrings) {
 TEST_F(FormatTestJS, TaggedTemplateStrings) {
   verifyFormat("var x = html`<ul>`;");
   verifyFormat("yield `hello`;");
+  verifyFormat("var f = {\n"
+               "  param: longTagName`This is a ${\n"
+               "                    'really'} long line`\n"
+               "};",
+               "var f = {param: longTagName`This is a ${'really'} long line`};",
+               getGoogleJSStyleWithColumns(40));
 }
 
 TEST_F(FormatTestJS, CastSyntax) {

@@ -37,13 +37,12 @@ public:
 
   ~CommandObjectPluginLoad() override = default;
 
-  int HandleArgumentCompletion(
-      CompletionRequest &request,
-      OptionElementVector &opt_element_vector) override {
+  void
+  HandleArgumentCompletion(CompletionRequest &request,
+                           OptionElementVector &opt_element_vector) override {
     CommandCompletions::InvokeCommonCompletionCallbacks(
         GetCommandInterpreter(), CommandCompletions::eDiskFileCompletion,
         request, nullptr);
-    return request.GetNumberOfMatches();
   }
 
 protected:
@@ -58,10 +57,10 @@ protected:
 
     Status error;
 
-    FileSpec dylib_fspec(command[0].ref);
+    FileSpec dylib_fspec(command[0].ref());
     FileSystem::Instance().Resolve(dylib_fspec);
 
-    if (m_interpreter.GetDebugger().LoadPlugin(dylib_fspec, error))
+    if (GetDebugger().LoadPlugin(dylib_fspec, error))
       result.SetStatus(eReturnStatusSuccessFinishResult);
     else {
       result.AppendError(error.AsCString());

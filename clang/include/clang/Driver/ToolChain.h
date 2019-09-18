@@ -99,10 +99,18 @@ public:
     RLT_Libgcc
   };
 
+  enum UnwindLibType {
+    UNW_None,
+    UNW_CompilerRT,
+    UNW_Libgcc
+  };
+
   enum RTTIMode {
     RM_Enabled,
     RM_Disabled,
   };
+
+  enum FileType { FT_Object, FT_Static, FT_Shared };
 
 private:
   friend class RegisterEffectiveTriple;
@@ -367,15 +375,25 @@ public:
     return ToolChain::CST_Libstdcxx;
   }
 
+  virtual UnwindLibType GetDefaultUnwindLibType() const {
+    return ToolChain::UNW_None;
+  }
+
   virtual std::string getCompilerRTPath() const;
 
   virtual std::string getCompilerRT(const llvm::opt::ArgList &Args,
                                     StringRef Component,
-                                    bool Shared = false) const;
+                                    FileType Type = ToolChain::FT_Static) const;
 
-  const char *getCompilerRTArgString(const llvm::opt::ArgList &Args,
-                                     StringRef Component,
-                                     bool Shared = false) const;
+  const char *
+  getCompilerRTArgString(const llvm::opt::ArgList &Args, StringRef Component,
+                         FileType Type = ToolChain::FT_Static) const;
+
+  // Returns target specific runtime path if it exists.
+  virtual Optional<std::string> getRuntimePath() const;
+
+  // Returns target specific C++ library path if it exists.
+  virtual Optional<std::string> getCXXStdlibPath() const;
 
   // Returns <ResourceDir>/lib/<OSName>/<arch>.  This is used by runtimes (such
   // as OpenMP) to find arch-specific libraries.
@@ -399,6 +417,9 @@ public:
 
   /// Test whether this toolchain defaults to PIE.
   virtual bool isPIEDefault() const = 0;
+
+  /// Test whether this toolchaind defaults to non-executable stacks.
+  virtual bool isNoExecStackDefault() const;
 
   /// Tests whether this toolchain forces its default for PIC, PIE or
   /// non-PIC.  If this returns true, any PIC related flags should be ignored
@@ -453,9 +474,7 @@ public:
   virtual bool SupportsEmbeddedBitcode() const { return false; }
 
   /// getThreadModel() - Which thread model does this target use?
-  virtual std::string getThreadModel(const llvm::opt::ArgList &) const {
-    return "posix";
-  }
+  virtual std::string getThreadModel() const { return "posix"; }
 
   /// isThreadModelSupported() - Does this target support a thread model?
   virtual bool isThreadModelSupported(const StringRef Model) const;
@@ -513,11 +532,20 @@ public:
   // given compilation arguments.
   virtual CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const;
 
+  // GetUnwindLibType - Determine the unwind library type to use with the
+  // given compilation arguments.
+  virtual UnwindLibType GetUnwindLibType(const llvm::opt::ArgList &Args) const;
+
   /// AddClangCXXStdlibIncludeArgs - Add the clang -cc1 level arguments to set
   /// the include paths to use for the given C++ standard library type.
   virtual void
   AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                llvm::opt::ArgStringList &CC1Args) const;
+
+  /// AddClangCXXStdlibIsystemArgs - Add the clang -cc1 level arguments to set
+  /// the specified include paths for the C++ standard library.
+  void AddClangCXXStdlibIsystemArgs(const llvm::opt::ArgList &DriverArgs,
+                                    llvm::opt::ArgStringList &CC1Args) const;
 
   /// Returns if the C++ standard library should be linked in.
   /// Note that e.g. -lm should still be linked even if this returns false.
@@ -565,7 +593,9 @@ public:
   virtual SanitizerMask getSupportedSanitizers() const;
 
   /// Return sanitizers which are enabled by default.
-  virtual SanitizerMask getDefaultSanitizers() const { return 0; }
+  virtual SanitizerMask getDefaultSanitizers() const {
+    return SanitizerMask();
+  }
 };
 
 /// Set a ToolChain's effective triple. Reset it when the registration object

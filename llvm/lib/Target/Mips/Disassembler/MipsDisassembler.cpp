@@ -12,6 +12,7 @@
 
 #include "MCTargetDesc/MipsMCTargetDesc.h"
 #include "Mips.h"
+#include "TargetInfo/MipsTargetInfo.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -265,6 +266,13 @@ static DecodeStatus DecodeJumpTargetMM(MCInst &Inst,
                                        unsigned Insn,
                                        uint64_t Address,
                                        const void *Decoder);
+
+// DecodeJumpTargetXMM - Decode microMIPS jump and link exchange target,
+// which is shifted left by 2 bit.
+static DecodeStatus DecodeJumpTargetXMM(MCInst &Inst,
+                                        unsigned Insn,
+                                        uint64_t Address,
+                                        const void *Decoder);
 
 static DecodeStatus DecodeMem(MCInst &Inst,
                               unsigned Insn,
@@ -539,15 +547,6 @@ static DecodeStatus DecodeMovePRegPair(MCInst &Inst, unsigned RegPair,
 
 static DecodeStatus DecodeMovePOperands(MCInst &Inst, unsigned Insn,
                                         uint64_t Address, const void *Decoder);
-
-namespace llvm {
-
-Target &getTheMipselTarget();
-Target &getTheMipsTarget();
-Target &getTheMips64Target();
-Target &getTheMips64elTarget();
-
-} // end namespace llvm
 
 static MCDisassembler *createMipsDisassembler(
                        const Target &T,
@@ -2295,6 +2294,15 @@ static DecodeStatus DecodeJumpTargetMM(MCInst &Inst,
                                        uint64_t Address,
                                        const void *Decoder) {
   unsigned JumpOffset = fieldFromInstruction(Insn, 0, 26) << 1;
+  Inst.addOperand(MCOperand::createImm(JumpOffset));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeJumpTargetXMM(MCInst &Inst,
+                                        unsigned Insn,
+                                        uint64_t Address,
+                                        const void *Decoder) {
+  unsigned JumpOffset = fieldFromInstruction(Insn, 0, 26) << 2;
   Inst.addOperand(MCOperand::createImm(JumpOffset));
   return MCDisassembler::Success;
 }

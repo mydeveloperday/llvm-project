@@ -16,6 +16,7 @@
 
 #include "sanitizer_common/sanitizer_internal_defs.h"
 #include "sanitizer_common/sanitizer_platform_limits_posix.h"
+#include <link.h>
 
 extern "C" {
 
@@ -24,6 +25,14 @@ void __hwasan_init_static();
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void __hwasan_init();
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __hwasan_library_loaded(ElfW(Addr) base, const ElfW(Phdr) * phdr,
+                             ElfW(Half) phnum);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __hwasan_library_unloaded(ElfW(Addr) base, const ElfW(Phdr) * phdr,
+                               ElfW(Half) phnum);
 
 using __sanitizer::uptr;
 using __sanitizer::sptr;
@@ -98,6 +107,9 @@ void __hwasan_tag_memory(uptr p, u8 tag, uptr sz);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 uptr __hwasan_tag_pointer(uptr p, u8 tag);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __hwasan_tag_mismatch(uptr addr, u8 ts);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 u8 __hwasan_generate_tag();
@@ -193,6 +205,9 @@ void * __sanitizer_calloc(uptr nmemb, uptr size);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void * __sanitizer_realloc(void *ptr, uptr size);
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void * __sanitizer_reallocarray(void *ptr, uptr nmemb, uptr size);
 
 SANITIZER_INTERFACE_ATTRIBUTE
 void * __sanitizer_malloc(uptr size);

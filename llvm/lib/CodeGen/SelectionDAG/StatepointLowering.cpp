@@ -347,16 +347,28 @@ static std::pair<SDValue, SDNode *> lowerCallFromStatepointLoweringInfo(
   return std::make_pair(ReturnValue, CallEnd->getOperand(0).getNode());
 }
 
+static MachineMemOperand* getMachineMemOperand(MachineFunction &MF,
+                                               FrameIndexSDNode &FI) {
+  auto PtrInfo = MachinePointerInfo::getFixedStack(MF, FI.getIndex());
+  auto MMOFlags = MachineMemOperand::MOStore |
+    MachineMemOperand::MOLoad | MachineMemOperand::MOVolatile;
+  auto &MFI = MF.getFrameInfo();
+  return MF.getMachineMemOperand(PtrInfo, MMOFlags, 
+                                 MFI.getObjectSize(FI.getIndex()),
+                                 MFI.getObjectAlignment(FI.getIndex()));
+}
+
 /// Spill a value incoming to the statepoint. It might be either part of
 /// vmstate
 /// or gcstate. In both cases unconditionally spill it on the stack unless it
 /// is a null constant. Return pair with first element being frame index
 /// containing saved value and second element with outgoing chain from the
 /// emitted store
-static std::pair<SDValue, SDValue>
+static std::tuple<SDValue, SDValue, MachineMemOperand*>
 spillIncomingStatepointValue(SDValue Incoming, SDValue Chain,
                              SelectionDAGBuilder &Builder) {
   SDValue Loc = Builder.StatepointLowering.getLocation(Incoming);
+  MachineMemOperand* MMO = nullptr;
 
   // Emit new store if we didn't do it for this ptr before
   if (!Loc.getNode()) {
@@ -366,7 +378,6 @@ spillIncomingStatepointValue(SDValue Incoming, SDValue Chain,
     // We use TargetFrameIndex so that isel will not select it into LEA
     Loc = Builder.DAG.getTargetFrameIndex(Index, Builder.getFrameIndexTy());
 
-#ifndef NDEBUG
     // Right now we always allocate spill slots that are of the same
     // size as the value we're about to spill (the size of spillee can
     // vary since we spill vectors of pointers too).  At some point we
@@ -375,17 +386,26 @@ spillIncomingStatepointValue(SDValue Incoming, SDValue Chain,
     MachineFrameInfo &MFI = Builder.DAG.getMachineFunction().getFrameInfo();
     assert((MFI.getObjectSize(Index) * 8) == Incoming.getValueSizeInBits() &&
            "Bad spill:  stack slot does not match!");
-#endif
 
+    // Note: Using the alignment of the spill slot (rather than the abi or
+    // preferred alignment) is required for correctness when dealing with spill
+    // slots with preferred alignments larger than frame alignment..
+    auto &MF = Builder.DAG.getMachineFunction();
+    auto PtrInfo = MachinePointerInfo::getFixedStack(MF, Index);
+    auto *StoreMMO =
+      MF.getMachineMemOperand(PtrInfo, MachineMemOperand::MOStore, 
+                              MFI.getObjectSize(Index),
+                              MFI.getObjectAlignment(Index));
     Chain = Builder.DAG.getStore(Chain, Builder.getCurSDLoc(), Incoming, Loc,
-                                 MachinePointerInfo::getFixedStack(
-                                     Builder.DAG.getMachineFunction(), Index));
+                                 StoreMMO);
 
+    MMO = getMachineMemOperand(MF, *cast<FrameIndexSDNode>(Loc));
+    
     Builder.StatepointLowering.setLocation(Incoming, Loc);
   }
 
   assert(Loc.getNode());
-  return std::make_pair(Loc, Chain);
+  return std::make_tuple(Loc, Chain, MMO);
 }
 
 /// Lower a single value incoming to a statepoint node.  This value can be
@@ -393,6 +413,7 @@ spillIncomingStatepointValue(SDValue Incoming, SDValue Chain,
 /// case constants and allocas, then fall back to spilling if required.
 static void lowerIncomingStatepointValue(SDValue Incoming, bool LiveInOnly,
                                          SmallVectorImpl<SDValue> &Ops,
+                                         SmallVectorImpl<MachineMemOperand*> &MemRefs,
                                          SelectionDAGBuilder &Builder) {
   // Note: We know all of these spills are independent, but don't bother to
   // exploit that chain wise.  DAGCombine will happily do so as needed, so
@@ -415,6 +436,11 @@ static void lowerIncomingStatepointValue(SDValue Incoming, bool LiveInOnly,
            "Incoming value is a frame index!");
     Ops.push_back(Builder.DAG.getTargetFrameIndex(FI->getIndex(),
                                                   Builder.getFrameIndexTy()));
+
+    auto &MF = Builder.DAG.getMachineFunction();
+    auto *MMO = getMachineMemOperand(MF, *FI);
+    MemRefs.push_back(MMO);
+    
   } else if (LiveInOnly) {
     // If this value is live in (not live-on-return, or live-through), we can
     // treat it the same way patchpoint treats it's "live in" values.  We'll
@@ -431,8 +457,10 @@ static void lowerIncomingStatepointValue(SDValue Incoming, bool LiveInOnly,
     // need to be optional since it requires a lot of complexity on the
     // runtime side which not all would support.
     auto Res = spillIncomingStatepointValue(Incoming, Chain, Builder);
-    Ops.push_back(Res.first);
-    Chain = Res.second;
+    Ops.push_back(std::get<0>(Res));
+    if (auto *MMO = std::get<2>(Res))
+      MemRefs.push_back(MMO);
+    Chain = std::get<1>(Res);;
   }
 
   Builder.DAG.setRoot(Chain);
@@ -447,7 +475,7 @@ static void lowerIncomingStatepointValue(SDValue Incoming, bool LiveInOnly,
 /// will be set to the last value spilled (if any were).
 static void
 lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
-                        SelectionDAGBuilder::StatepointLoweringInfo &SI,
+                        SmallVectorImpl<MachineMemOperand*> &MemRefs,                                    SelectionDAGBuilder::StatepointLoweringInfo &SI,
                         SelectionDAGBuilder &Builder) {
   // Lower the deopt and gc arguments for this statepoint.  Layout will be:
   // deopt argument length, deopt arguments.., gc arguments...
@@ -531,7 +559,7 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
     if (!Incoming.getNode())
       Incoming = Builder.getValue(V);
     const bool LiveInValue = LiveInDeopt && !isGCValue(V);
-    lowerIncomingStatepointValue(Incoming, LiveInValue, Ops, Builder);
+    lowerIncomingStatepointValue(Incoming, LiveInValue, Ops, MemRefs, Builder);
   }
 
   // Finally, go ahead and lower all the gc arguments.  There's no prefixed
@@ -542,11 +570,11 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   for (unsigned i = 0; i < SI.Bases.size(); ++i) {
     const Value *Base = SI.Bases[i];
     lowerIncomingStatepointValue(Builder.getValue(Base), /*LiveInOnly*/ false,
-                                 Ops, Builder);
+                                 Ops, MemRefs, Builder);
 
     const Value *Ptr = SI.Ptrs[i];
     lowerIncomingStatepointValue(Builder.getValue(Ptr), /*LiveInOnly*/ false,
-                                 Ops, Builder);
+                                 Ops, MemRefs, Builder);
   }
 
   // If there are any explicit spill slots passed to the statepoint, record
@@ -562,6 +590,10 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
              "Incoming value is a frame index!");
       Ops.push_back(Builder.DAG.getTargetFrameIndex(FI->getIndex(),
                                                     Builder.getFrameIndexTy()));
+
+      auto &MF = Builder.DAG.getMachineFunction();
+      auto *MMO = getMachineMemOperand(MF, *FI);
+      MemRefs.push_back(MMO);
     }
   }
 
@@ -628,7 +660,8 @@ SDValue SelectionDAGBuilder::LowerAsSTATEPOINT(
 
   // Lower statepoint vmstate and gcstate arguments
   SmallVector<SDValue, 10> LoweredMetaArgs;
-  lowerStatepointMetaArgs(LoweredMetaArgs, SI, *this);
+  SmallVector<MachineMemOperand*, 16> MemRefs;
+  lowerStatepointMetaArgs(LoweredMetaArgs, MemRefs, SI, *this);
 
   // Now that we've emitted the spills, we need to update the root so that the
   // call sequence is ordered correctly.
@@ -744,8 +777,9 @@ SDValue SelectionDAGBuilder::LowerAsSTATEPOINT(
   // input.  This allows someone else to chain off us as needed.
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
-  SDNode *StatepointMCNode =
-      DAG.getMachineNode(TargetOpcode::STATEPOINT, getCurSDLoc(), NodeTys, Ops);
+  MachineSDNode *StatepointMCNode =
+    DAG.getMachineNode(TargetOpcode::STATEPOINT, getCurSDLoc(), NodeTys, Ops);
+  DAG.setNodeMemRefs(StatepointMCNode, MemRefs);
 
   SDNode *SinkNode = StatepointMCNode;
 
@@ -982,20 +1016,27 @@ void SelectionDAGBuilder::visitGCRelocate(const GCRelocateInst &Relocate) {
     return;
   }
 
-  SDValue SpillSlot =
-    DAG.getTargetFrameIndex(*DerivedPtrLocation, getFrameIndexTy());
+  unsigned Index = *DerivedPtrLocation;
+  SDValue SpillSlot = DAG.getTargetFrameIndex(Index, getFrameIndexTy());
 
   // Note: We know all of these reloads are independent, but don't bother to
   // exploit that chain wise.  DAGCombine will happily do so as needed, so
   // doing it here would be a small compile time win at most.
   SDValue Chain = getRoot();
 
-  SDValue SpillLoad =
-      DAG.getLoad(DAG.getTargetLoweringInfo().getValueType(DAG.getDataLayout(),
-                                                           Relocate.getType()),
-                  getCurSDLoc(), Chain, SpillSlot,
-                  MachinePointerInfo::getFixedStack(DAG.getMachineFunction(),
-                                                    *DerivedPtrLocation));
+  auto &MF = DAG.getMachineFunction();
+  auto &MFI = MF.getFrameInfo();
+  auto PtrInfo = MachinePointerInfo::getFixedStack(MF, Index);
+  auto *LoadMMO =
+    MF.getMachineMemOperand(PtrInfo, MachineMemOperand::MOLoad, 
+                            MFI.getObjectSize(Index),
+                            MFI.getObjectAlignment(Index));
+
+  auto LoadVT = DAG.getTargetLoweringInfo().getValueType(DAG.getDataLayout(),
+                                                         Relocate.getType());
+
+  SDValue SpillLoad = DAG.getLoad(LoadVT, getCurSDLoc(), Chain,
+                                  SpillSlot, LoadMMO);
 
   DAG.setRoot(SpillLoad.getValue(1));
 

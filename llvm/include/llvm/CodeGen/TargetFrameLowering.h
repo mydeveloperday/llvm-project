@@ -14,6 +14,7 @@
 #define LLVM_CODEGEN_TARGETFRAMELOWERING_H
 
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/ADT/StringSwitch.h"
 #include <utility>
 #include <vector>
 
@@ -22,6 +23,14 @@ namespace llvm {
   class CalleeSavedInfo;
   class MachineFunction;
   class RegScavenger;
+
+namespace TargetStackID {
+  enum Value {
+    Default = 0,
+    SGPRSpill = 1,
+    NoAlloc = 255
+  };
+}
 
 /// Information about stack frame layout on the target.  It holds the direction
 /// of stack growth, the known stack alignment on entry to each function, and
@@ -272,6 +281,11 @@ public:
     return getFrameIndexReference(MF, FI, FrameReg);
   }
 
+  /// Returns the callee-saved registers as computed by determineCalleeSaves
+  /// in the BitVector \p SavedRegs.
+  virtual void getCalleeSaves(const MachineFunction &MF,
+                                  BitVector &SavedRegs) const;
+
   /// This method determines which of the registers reported by
   /// TargetRegisterInfo::getCalleeSavedRegs() should actually get saved.
   /// The default implementation checks populates the \p SavedRegs bitset with
@@ -279,6 +293,9 @@ public:
   /// this function to save additional registers.
   /// This method also sets up the register scavenger ensuring there is a free
   /// register or a frameindex available.
+  /// This method should not be called by any passes outside of PEI, because
+  /// it may change state passed in by \p MF and \p RS. The preferred
+  /// interface outside PEI is getCalleeSaves.
   virtual void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
                                     RegScavenger *RS = nullptr) const;
 
@@ -345,6 +362,16 @@ public:
     return true;
   }
 
+  virtual bool isSupportedStackID(TargetStackID::Value ID) const {
+    switch (ID) {
+    default:
+      return false;
+    case TargetStackID::Default:
+    case TargetStackID::NoAlloc:
+      return true;
+    }
+  }
+
   /// Check if given function is safe for not having callee saved registers.
   /// This is used when interprocedural register allocation is enabled.
   static bool isSafeForNoCSROpt(const Function &F) {
@@ -356,6 +383,11 @@ public:
       if (auto CS = ImmutableCallSite(U))
         if (CS.isTailCall())
           return false;
+    return true;
+  }
+
+  /// Check if the no-CSR optimisation is profitable for the given function.
+  virtual bool isProfitableForNoCSROpt(const Function &F) const {
     return true;
   }
 

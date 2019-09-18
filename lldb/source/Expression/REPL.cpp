@@ -15,7 +15,6 @@
 #include "lldb/Host/HostInfo.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
-#include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/AnsiTerminal.h"
 
@@ -29,12 +28,6 @@ REPL::REPL(LLVMCastKind kind, Target &target) : m_target(target), m_kind(kind) {
   auto exe_ctx = debugger.GetCommandInterpreter().GetExecutionContext();
   m_format_options.OptionParsingStarting(&exe_ctx);
   m_varobj_options.OptionParsingStarting(&exe_ctx);
-  m_command_options.OptionParsingStarting(&exe_ctx);
-
-  // Default certain settings for REPL regardless of the global settings.
-  m_command_options.unwind_on_error = false;
-  m_command_options.ignore_breakpoints = false;
-  m_command_options.debug = false;
 }
 
 REPL::~REPL() = default;
@@ -75,13 +68,13 @@ lldb::IOHandlerSP REPL::GetIOHandler() {
     Debugger &debugger = m_target.GetDebugger();
     m_io_handler_sp = std::make_shared<IOHandlerEditline>(
         debugger, IOHandler::Type::REPL,
-                              "lldb-repl", // Name of input reader for history
-                              llvm::StringRef("> "), // prompt
-                              llvm::StringRef(". "), // Continuation prompt
-                              true,                  // Multi-line
-                              true, // The REPL prompt is always colored
-                              1,    // Line number
-        *this);
+        "lldb-repl",           // Name of input reader for history
+        llvm::StringRef("> "), // prompt
+        llvm::StringRef(". "), // Continuation prompt
+        true,                  // Multi-line
+        true,                  // The REPL prompt is always colored
+        1,                     // Line number
+        *this, nullptr);
 
     // Don't exit if CTRL+C is pressed
     static_cast<IOHandlerEditline *>(m_io_handler_sp.get())
@@ -99,7 +92,7 @@ lldb::IOHandlerSP REPL::GetIOHandler() {
   return m_io_handler_sp;
 }
 
-void REPL::IOHandlerActivated(IOHandler &io_handler) {
+void REPL::IOHandlerActivated(IOHandler &io_handler, bool interactive) {
   lldb::ProcessSP process_sp = m_target.GetProcessSP();
   if (process_sp && process_sp->IsAlive())
     return;
@@ -213,7 +206,7 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
       // Meta command
       // Strip the ':'
       code.erase(0, 1);
-      if (Args::StripSpaces(code)) {
+      if (!llvm::StringRef(code).trim().empty()) {
         // "lldb" was followed by arguments, so just execute the command dump
         // the results
 
@@ -276,22 +269,15 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 
       const bool colorize_err = error_sp->GetFile().GetIsTerminalWithColors();
 
-      EvaluateExpressionOptions expr_options;
+      EvaluateExpressionOptions expr_options = m_expr_options;
       expr_options.SetCoerceToId(m_varobj_options.use_objc);
-      expr_options.SetUnwindOnError(m_command_options.unwind_on_error);
-      expr_options.SetIgnoreBreakpoints(m_command_options.ignore_breakpoints);
       expr_options.SetKeepInMemory(true);
       expr_options.SetUseDynamic(m_varobj_options.use_dynamic);
-      expr_options.SetTryAllThreads(m_command_options.try_all_threads);
       expr_options.SetGenerateDebugInfo(true);
       expr_options.SetREPLEnabled(true);
       expr_options.SetColorizeErrors(colorize_err);
       expr_options.SetPoundLine(m_repl_source_path.c_str(),
                                 m_code.GetSize() + 1);
-      if (m_command_options.timeout > 0)
-        expr_options.SetTimeout(std::chrono::microseconds(m_command_options.timeout));
-      else
-        expr_options.SetTimeout(llvm::None);
 
       expr_options.SetLanguage(GetLanguage());
 
@@ -307,7 +293,6 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
       lldb::ExpressionResults execution_results =
           UserExpression::Evaluate(exe_ctx, expr_options, code.c_str(),
                                    expr_prefix, result_valobj_sp, error,
-                                   0,       // Line offset
                                    nullptr, // Fixed Expression
                                    &jit_module_sp);
 
@@ -448,31 +433,30 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
   }
 }
 
-int REPL::IOHandlerComplete(IOHandler &io_handler, const char *current_line,
-                            const char *cursor, const char *last_char,
-                            int skip_first_n_matches, int max_matches,
-                            StringList &matches, StringList &descriptions) {
-  matches.Clear();
-
-  llvm::StringRef line(current_line, cursor - current_line);
-
+void REPL::IOHandlerComplete(IOHandler &io_handler,
+                             CompletionRequest &request) {
   // Complete an LLDB command if the first character is a colon...
-  if (!line.empty() && line[0] == ':') {
+  if (request.GetRawLine().startswith(":")) {
     Debugger &debugger = m_target.GetDebugger();
 
     // auto complete LLDB commands
-    const char *lldb_current_line = line.substr(1).data();
-    return debugger.GetCommandInterpreter().HandleCompletion(
-        lldb_current_line, cursor, last_char, skip_first_n_matches, max_matches,
-        matches, descriptions);
+    llvm::StringRef new_line = request.GetRawLine().drop_front();
+    CompletionResult sub_result;
+    CompletionRequest sub_request(new_line, request.GetRawCursorPos() - 1,
+                                  sub_result);
+    debugger.GetCommandInterpreter().HandleCompletion(sub_request);
+    StringList matches, descriptions;
+    sub_result.GetMatches(matches);
+    sub_result.GetDescriptions(descriptions);
+    request.AddCompletions(matches, descriptions);
+    return;
   }
 
   // Strip spaces from the line and see if we had only spaces
-  line = line.ltrim();
-  if (line.empty()) {
+  if (request.GetRawLineUntilCursor().trim().empty()) {
     // Only spaces on this line, so just indent
-    matches.AppendString(m_indent_str);
-    return 1;
+    request.AddCompletion(m_indent_str);
+    return;
   }
 
   std::string current_code;
@@ -494,12 +478,17 @@ int REPL::IOHandlerComplete(IOHandler &io_handler, const char *current_line,
     }
   }
 
-  if (cursor > current_line) {
-    current_code.append("\n");
-    current_code.append(current_line, cursor - current_line);
-  }
+  current_code.append("\n");
+  current_code += request.GetRawLineUntilCursor();
 
-  return CompleteCode(current_code, matches);
+  StringList matches;
+  int result = CompleteCode(current_code, matches);
+  if (result == -2) {
+    assert(matches.GetSize() == 1);
+    request.AddCompletion(matches.GetStringAtIndex(0), "",
+                          CompletionMode::RewriteLine);
+  } else
+    request.AddCompletions(matches);
 }
 
 bool QuitCommandOverrideCallback(void *baton, const char **argv) {

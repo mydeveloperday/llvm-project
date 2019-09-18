@@ -17,16 +17,17 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCDirectives.h"
-#include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include <vector>
 
 namespace llvm {
 
 class MCContext;
+class MCCFIInstruction;
 class MCExpr;
 class MCSection;
 class MCStreamer;
+class MCSubtargetInfo;
 class MCSymbol;
 
 namespace WinEH {
@@ -163,6 +164,10 @@ protected:
   /// ".data_region/.end_data_region" directives. If false, use "$d/$a" labels
   /// instead.
   bool UseDataRegionDirectives = false;
+
+  /// True if .align is to be used for alignment. Only power-of-two
+  /// alignment is supported.
+  bool UseDotAlignForAlignment = false;
 
   //===--- Data Emission Directives -------------------------------------===//
 
@@ -473,7 +478,13 @@ public:
   bool hasMachoTBSSDirective() const { return HasMachoTBSSDirective; }
   bool hasCOFFAssociativeComdats() const { return HasCOFFAssociativeComdats; }
   bool hasCOFFComdatConstants() const { return HasCOFFComdatConstants; }
-  unsigned getMaxInstLength() const { return MaxInstLength; }
+
+  /// Returns the maximum possible encoded instruction size in bytes. If \p STI
+  /// is null, this should be the maximum size for any subtarget.
+  virtual unsigned getMaxInstLength(const MCSubtargetInfo *STI = nullptr) const {
+    return MaxInstLength;
+  }
+
   unsigned getMinInstAlignment() const { return MinInstAlignment; }
   bool getDollarIsPC() const { return DollarIsPC; }
   const char *getSeparatorString() const { return SeparatorString; }
@@ -511,6 +522,10 @@ public:
 
   bool doesSupportDataRegionDirectives() const {
     return UseDataRegionDirectives;
+  }
+
+  bool useDotAlignForAlignment() const {
+    return UseDotAlignForAlignment;
   }
 
   const char *getZeroDirective() const { return ZeroDirective; }
@@ -597,9 +612,7 @@ public:
     return SupportsExtendedDwarfLocDirective;
   }
 
-  void addInitialFrameState(const MCCFIInstruction &Inst) {
-    InitialFrameState.push_back(Inst);
-  }
+  void addInitialFrameState(const MCCFIInstruction &Inst);
 
   const std::vector<MCCFIInstruction> &getInitialFrameState() const {
     return InitialFrameState;

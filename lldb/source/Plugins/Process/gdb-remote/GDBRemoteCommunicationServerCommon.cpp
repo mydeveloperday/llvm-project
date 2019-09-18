@@ -28,12 +28,12 @@
 #include "lldb/Interpreter/OptionArgParser.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Target/Platform.h"
-#include "lldb/Target/Process.h"
 #include "lldb/Utility/Endian.h"
+#include "lldb/Utility/GDBRemote.h"
 #include "lldb/Utility/JSON.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/StreamGDBRemote.h"
 #include "lldb/Utility/StreamString.h"
+#include "lldb/Utility/StructuredData.h"
 #include "llvm/ADT/Triple.h"
 
 #include "ProcessGDBRemoteLog.h"
@@ -55,9 +55,7 @@ const static uint32_t g_default_packet_timeout_sec = 20; // seconds
 const static uint32_t g_default_packet_timeout_sec = 0; // not specified
 #endif
 
-//----------------------------------------------------------------------
 // GDBRemoteCommunicationServerCommon constructor
-//----------------------------------------------------------------------
 GDBRemoteCommunicationServerCommon::GDBRemoteCommunicationServerCommon(
     const char *comm_name, const char *listener_name)
     : GDBRemoteCommunicationServer(comm_name, listener_name),
@@ -176,9 +174,7 @@ GDBRemoteCommunicationServerCommon::GDBRemoteCommunicationServerCommon(
       &GDBRemoteCommunicationServerCommon::Handle_vFile_unlink);
 }
 
-//----------------------------------------------------------------------
 // Destructor
-//----------------------------------------------------------------------
 GDBRemoteCommunicationServerCommon::~GDBRemoteCommunicationServerCommon() {}
 
 GDBRemoteCommunication::PacketResult
@@ -237,11 +233,7 @@ GDBRemoteCommunicationServerCommon::Handle_qHostInfo(
   if (host_arch.GetMachine() == llvm::Triple::aarch64 ||
       host_arch.GetMachine() == llvm::Triple::aarch64_be ||
       host_arch.GetMachine() == llvm::Triple::arm ||
-      host_arch.GetMachine() == llvm::Triple::armeb ||
-      host_arch.GetMachine() == llvm::Triple::mips64 ||
-      host_arch.GetMachine() == llvm::Triple::mips64el ||
-      host_arch.GetMachine() == llvm::Triple::mips ||
-      host_arch.GetMachine() == llvm::Triple::mipsel)
+      host_arch.GetMachine() == llvm::Triple::armeb || host_arch.IsMIPS())
     response.Printf("watchpoint_exceptions_received:before;");
   else
     response.Printf("watchpoint_exceptions_received:after;");
@@ -267,6 +259,15 @@ GDBRemoteCommunicationServerCommon::Handle_qHostInfo(
     response.Format("os_version:{0}", version.getAsString());
     response.PutChar(';');
   }
+
+#if defined(__APPLE__)
+  llvm::VersionTuple maccatalyst_version = HostInfo::GetMacCatalystVersion();
+  if (!maccatalyst_version.empty()) {
+    response.Format("maccatalyst_version:{0}",
+                    maccatalyst_version.getAsString());
+    response.PutChar(';');
+  }
+#endif
 
   std::string s;
   if (HostInfo::GetOSBuildString(s)) {
@@ -429,22 +430,20 @@ GDBRemoteCommunicationServerCommon::Handle_qUserName(
     StringExtractorGDBRemote &packet) {
 #if !defined(LLDB_DISABLE_POSIX)
   Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_PROCESS));
-  if (log)
-    log->Printf("GDBRemoteCommunicationServerCommon::%s begin", __FUNCTION__);
+  LLDB_LOGF(log, "GDBRemoteCommunicationServerCommon::%s begin", __FUNCTION__);
 
   // Packet format: "qUserName:%i" where %i is the uid
   packet.SetFilePos(::strlen("qUserName:"));
   uint32_t uid = packet.GetU32(UINT32_MAX);
   if (uid != UINT32_MAX) {
-    std::string name;
-    if (HostInfo::LookupUserName(uid, name)) {
+    if (llvm::Optional<llvm::StringRef> name =
+            HostInfo::GetUserIDResolver().GetUserName(uid)) {
       StreamString response;
-      response.PutStringAsRawHex8(name);
+      response.PutStringAsRawHex8(*name);
       return SendPacketNoLock(response.GetString());
     }
   }
-  if (log)
-    log->Printf("GDBRemoteCommunicationServerCommon::%s end", __FUNCTION__);
+  LLDB_LOGF(log, "GDBRemoteCommunicationServerCommon::%s end", __FUNCTION__);
 #endif
   return SendErrorResponse(5);
 }
@@ -457,10 +456,10 @@ GDBRemoteCommunicationServerCommon::Handle_qGroupName(
   packet.SetFilePos(::strlen("qGroupName:"));
   uint32_t gid = packet.GetU32(UINT32_MAX);
   if (gid != UINT32_MAX) {
-    std::string name;
-    if (HostInfo::LookupGroupName(gid, name)) {
+    if (llvm::Optional<llvm::StringRef> name =
+            HostInfo::GetUserIDResolver().GetGroupName(gid)) {
       StreamString response;
-      response.PutStringAsRawHex8(name);
+      response.PutStringAsRawHex8(*name);
       return SendPacketNoLock(response.GetString());
     }
   }
@@ -560,10 +559,10 @@ GDBRemoteCommunicationServerCommon::Handle_vFile_pRead(
   packet.SetFilePos(::strlen("vFile:pread:"));
   int fd = packet.GetS32(-1);
   if (packet.GetChar() == ',') {
-    size_t count = packet.GetU64(UINT64_MAX);
+    size_t count = packet.GetU64(SIZE_MAX);
     if (packet.GetChar() == ',') {
       off_t offset = packet.GetU64(UINT32_MAX);
-      if (count == UINT64_MAX) {
+      if (count == SIZE_MAX) {
         response.Printf("F-1:%i", EINVAL);
         return SendPacketNoLock(response.GetString());
       }
@@ -833,6 +832,7 @@ GDBRemoteCommunicationServerCommon::Handle_qSupported(
 #if defined(__linux__) || defined(__NetBSD__)
   response.PutCString(";QPassSignals+");
   response.PutCString(";qXfer:auxv:read+");
+  response.PutCString(";qXfer:libraries-svr4:read+");
 #endif
 
   return SendPacketNoLock(response.GetString());
@@ -1024,9 +1024,8 @@ GDBRemoteCommunicationServerCommon::Handle_A(StringExtractorGDBRemote &packet) {
                   m_process_launch_info.GetExecutableFile().SetFile(
                       arg, FileSpec::Style::native);
                 m_process_launch_info.GetArguments().AppendArgument(arg);
-                if (log)
-                  log->Printf("LLGSPacketHandler::%s added arg %d: \"%s\"",
-                              __FUNCTION__, actual_arg_index, arg.c_str());
+                LLDB_LOGF(log, "LLGSPacketHandler::%s added arg %d: \"%s\"",
+                          __FUNCTION__, actual_arg_index, arg.c_str());
                 ++actual_arg_index;
               }
             }

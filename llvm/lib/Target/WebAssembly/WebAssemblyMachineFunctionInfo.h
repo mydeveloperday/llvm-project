@@ -17,10 +17,15 @@
 
 #include "MCTargetDesc/WebAssemblyMCTargetDesc.h"
 #include "llvm/BinaryFormat/Wasm.h"
+#include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCSymbolWasm.h"
 
 namespace llvm {
+
+namespace yaml {
+struct WebAssemblyFunctionInfo;
+}
 
 /// This class is derived from MachineFunctionInfo and contains private
 /// WebAssembly-specific information for each MachineFunction.
@@ -51,9 +56,13 @@ class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   // overaligned values on the user stack.
   unsigned BasePtrVreg = -1U;
 
+  // Function properties.
+  bool CFGStackified = false;
+
 public:
   explicit WebAssemblyFunctionInfo(MachineFunction &MF) : MF(MF) {}
   ~WebAssemblyFunctionInfo() override;
+  void initializeBaseYamlFields(const yaml::WebAssemblyFunctionInfo &YamlMFI);
 
   void addParam(MVT VT) { Params.push_back(VT); }
   const std::vector<MVT> &getParams() const { return Params; }
@@ -87,13 +96,13 @@ public:
 
   void stackifyVReg(unsigned VReg) {
     assert(MF.getRegInfo().getUniqueVRegDef(VReg));
-    auto I = TargetRegisterInfo::virtReg2Index(VReg);
+    auto I = Register::virtReg2Index(VReg);
     if (I >= VRegStackified.size())
       VRegStackified.resize(I + 1);
     VRegStackified.set(I);
   }
   bool isVRegStackified(unsigned VReg) const {
-    auto I = TargetRegisterInfo::virtReg2Index(VReg);
+    auto I = Register::virtReg2Index(VReg);
     if (I >= VRegStackified.size())
       return false;
     return VRegStackified.test(I);
@@ -102,12 +111,12 @@ public:
   void initWARegs();
   void setWAReg(unsigned VReg, unsigned WAReg) {
     assert(WAReg != UnusedReg);
-    auto I = TargetRegisterInfo::virtReg2Index(VReg);
+    auto I = Register::virtReg2Index(VReg);
     assert(I < WARegs.size());
     WARegs[I] = WAReg;
   }
   unsigned getWAReg(unsigned VReg) const {
-    auto I = TargetRegisterInfo::virtReg2Index(VReg);
+    auto I = Register::virtReg2Index(VReg);
     assert(I < WARegs.size());
     return WARegs[I];
   }
@@ -117,6 +126,9 @@ public:
     assert(Reg & INT32_MIN);
     return Reg & INT32_MAX;
   }
+
+  bool isCFGStackified() const { return CFGStackified; }
+  void setCFGStackified(bool Value = true) { CFGStackified = Value; }
 };
 
 void computeLegalValueVTs(const Function &F, const TargetMachine &TM, Type *Ty,
@@ -134,6 +146,26 @@ void valTypesFromMVTs(const ArrayRef<MVT> &In,
 std::unique_ptr<wasm::WasmSignature>
 signatureFromMVTs(const SmallVectorImpl<MVT> &Results,
                   const SmallVectorImpl<MVT> &Params);
+
+namespace yaml {
+
+struct WebAssemblyFunctionInfo final : public yaml::MachineFunctionInfo {
+  bool CFGStackified = false;
+
+  WebAssemblyFunctionInfo() = default;
+  WebAssemblyFunctionInfo(const llvm::WebAssemblyFunctionInfo &MFI);
+
+  void mappingImpl(yaml::IO &YamlIO) override;
+  ~WebAssemblyFunctionInfo() = default;
+};
+
+template <> struct MappingTraits<WebAssemblyFunctionInfo> {
+  static void mapping(IO &YamlIO, WebAssemblyFunctionInfo &MFI) {
+    YamlIO.mapOptional("isCFGStackified", MFI.CFGStackified, false);
+  }
+};
+
+} // end namespace yaml
 
 } // end namespace llvm
 

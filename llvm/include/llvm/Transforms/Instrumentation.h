@@ -150,28 +150,12 @@ struct InstrProfOptions {
 ModulePass *createInstrProfilingLegacyPass(
     const InstrProfOptions &Options = InstrProfOptions(), bool IsCS = false);
 
-FunctionPass *createHWAddressSanitizerPass(bool CompileKernel = false,
-                                           bool Recover = false);
+ModulePass *createInstrOrderFilePass();
 
 // Insert DataFlowSanitizer (dynamic data flow analysis) instrumentation
 ModulePass *createDataFlowSanitizerPass(
     const std::vector<std::string> &ABIListFiles = std::vector<std::string>(),
     void *(*getArgTLS)() = nullptr, void *(*getRetValTLS)() = nullptr);
-
-// Options for EfficiencySanitizer sub-tools.
-struct EfficiencySanitizerOptions {
-  enum Type {
-    ESAN_None = 0,
-    ESAN_CacheFrag,
-    ESAN_WorkingSet,
-  } ToolType = ESAN_None;
-
-  EfficiencySanitizerOptions() = default;
-};
-
-// Insert EfficiencySanitizer instrumentation.
-ModulePass *createEfficiencySanitizerPass(
-    const EfficiencySanitizerOptions &Options = EfficiencySanitizerOptions());
 
 // Options for sanitizer coverage instrumentation.
 struct SanitizerCoverageOptions {
@@ -196,10 +180,6 @@ struct SanitizerCoverageOptions {
 
   SanitizerCoverageOptions() = default;
 };
-
-// Insert SanitizerCoverage instrumentation.
-ModulePass *createSanitizerCoverageModulePass(
-    const SanitizerCoverageOptions &Options = SanitizerCoverageOptions());
 
 /// Calculate what to divide by to scale counts.
 ///

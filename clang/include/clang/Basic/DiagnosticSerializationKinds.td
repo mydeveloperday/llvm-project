@@ -72,14 +72,18 @@ def note_module_file_imported_by : Note<
 def err_module_file_not_module : Error<
   "AST file '%0' was not built as a module">, DefaultFatal;
 
+def remark_module_import : Remark<
+  "importing module '%0'%select{| into '%3'}2 from '%1'">,
+  InGroup<ModuleImport>;
+
 def err_imported_module_not_found : Error<
-    "module '%0' in AST file '%1' (imported by AST file '%2') "
+    "module '%0' in AST file '%1' %select{(imported by AST file '%2') |}4"
     "is not defined in any loaded module map file; "
     "maybe you need to load '%3'?">, DefaultFatal;
 def note_imported_by_pch_module_not_found : Note<
     "consider adding '%0' to the header search path">;
 def err_imported_module_modmap_changed : Error<
-    "module '%0' imported by AST file '%1' found in a different module map file"
+    "module '%0' %select{in|imported by}4 AST file '%1' found in a different module map file"
     " (%2) than when the importing AST file was built (%3)">, DefaultFatal;
 def err_imported_module_relocated : Error<
     "module '%0' was built in directory '%1' but now resides in "

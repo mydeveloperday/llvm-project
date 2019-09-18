@@ -111,18 +111,18 @@ Status OptionValueDictionary::SetArgs(const Args &args,
       return error;
     }
     for (const auto &entry : args) {
-      if (entry.ref.empty()) {
+      if (entry.ref().empty()) {
         error.SetErrorString("empty argument");
         return error;
       }
-      if (!entry.ref.contains('=')) {
+      if (!entry.ref().contains('=')) {
         error.SetErrorString(
             "assign operation takes one or more key=value arguments");
         return error;
       }
 
       llvm::StringRef key, value;
-      std::tie(key, value) = entry.ref.split('=');
+      std::tie(key, value) = entry.ref().split('=');
       bool key_valid = false;
       if (key.empty()) {
         error.SetErrorString("empty dictionary key");
@@ -276,7 +276,7 @@ Status OptionValueDictionary::SetSubValue(const ExecutionContext *exe_ctx,
 }
 
 lldb::OptionValueSP
-OptionValueDictionary::GetValueForKey(const ConstString &key) const {
+OptionValueDictionary::GetValueForKey(ConstString key) const {
   lldb::OptionValueSP value_sp;
   collection::const_iterator pos = m_values.find(key);
   if (pos != m_values.end())
@@ -284,7 +284,7 @@ OptionValueDictionary::GetValueForKey(const ConstString &key) const {
   return value_sp;
 }
 
-bool OptionValueDictionary::SetValueForKey(const ConstString &key,
+bool OptionValueDictionary::SetValueForKey(ConstString key,
                                            const lldb::OptionValueSP &value_sp,
                                            bool can_replace) {
   // Make sure the value_sp object is allowed to contain values of the type
@@ -301,7 +301,7 @@ bool OptionValueDictionary::SetValueForKey(const ConstString &key,
   return false;
 }
 
-bool OptionValueDictionary::DeleteValueForKey(const ConstString &key) {
+bool OptionValueDictionary::DeleteValueForKey(ConstString key) {
   collection::iterator pos = m_values.find(key);
   if (pos != m_values.end()) {
     m_values.erase(pos);

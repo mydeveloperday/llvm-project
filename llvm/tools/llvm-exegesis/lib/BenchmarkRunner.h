@@ -45,14 +45,15 @@ public:
   virtual ~BenchmarkRunner();
 
   InstructionBenchmark runConfiguration(const BenchmarkCode &Configuration,
-                                        unsigned NumRepetitions) const;
+                                        unsigned NumRepetitions,
+                                        bool DumpObjectToDisk) const;
 
   // Scratch space to run instructions that touch memory.
   struct ScratchSpace {
     static constexpr const size_t kAlignment = 1024;
     static constexpr const size_t kSize = 1 << 20; // 1MB.
     ScratchSpace()
-        : UnalignedPtr(llvm::make_unique<char[]>(kSize + kAlignment)),
+        : UnalignedPtr(std::make_unique<char[]>(kSize + kAlignment)),
           AlignedPtr(
               UnalignedPtr.get() + kAlignment -
               (reinterpret_cast<intptr_t>(UnalignedPtr.get()) % kAlignment)) {}
@@ -84,7 +85,6 @@ private:
   llvm::Expected<std::string>
   writeObjectFile(const BenchmarkCode &Configuration,
                   llvm::ArrayRef<llvm::MCInst> Code) const;
-
 
   const std::unique_ptr<ScratchSpace> Scratch;
 };

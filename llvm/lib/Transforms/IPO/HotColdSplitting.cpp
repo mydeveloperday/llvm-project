@@ -149,7 +149,7 @@ static bool mayExtractBlock(const BasicBlock &BB) {
 /// module has profile data), set entry count to 0 to ensure treated as cold.
 /// Return true if the function is changed.
 static bool markFunctionCold(Function &F, bool UpdateEntryCount = false) {
-  assert(!F.hasFnAttribute(Attribute::OptimizeNone) && "Can't mark this cold");
+  assert(!F.hasOptNone() && "Can't mark this cold");
   bool Changed = false;
   if (!F.hasFnAttribute(Attribute::Cold)) {
     F.addFnAttr(Attribute::Cold);
@@ -607,9 +607,9 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
     });
 
     if (!DT)
-      DT = make_unique<DominatorTree>(F);
+      DT = std::make_unique<DominatorTree>(F);
     if (!PDT)
-      PDT = make_unique<PostDominatorTree>(F);
+      PDT = std::make_unique<PostDominatorTree>(F);
 
     auto Regions = OutliningRegion::create(*BB, *DT, *PDT);
     for (OutliningRegion &Region : Regions) {
@@ -664,7 +664,7 @@ bool HotColdSplitting::outlineColdRegions(Function &F, bool HasProfileSummary) {
 
 bool HotColdSplitting::run(Module &M) {
   bool Changed = false;
-  bool HasProfileSummary = M.getProfileSummary();
+  bool HasProfileSummary = (M.getProfileSummary(/* IsCS */ false) != nullptr);
   for (auto It = M.begin(), End = M.end(); It != End; ++It) {
     Function &F = *It;
 
@@ -673,7 +673,7 @@ bool HotColdSplitting::run(Module &M) {
       continue;
 
     // Do not modify `optnone` functions.
-    if (F.hasFnAttribute(Attribute::OptimizeNone))
+    if (F.hasOptNone())
       continue;
 
     // Detect inherently cold functions and mark them as such.

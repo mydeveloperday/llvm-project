@@ -44,9 +44,7 @@ class SymbolFileNativePDB : public SymbolFile {
   friend class UdtRecordCompleter;
 
 public:
-  //------------------------------------------------------------------
   // Static Functions
-  //------------------------------------------------------------------
   static void Initialize();
 
   static void Terminate();
@@ -57,12 +55,10 @@ public:
 
   static const char *GetPluginDescriptionStatic();
 
-  static SymbolFile *CreateInstance(ObjectFile *obj_file);
+  static SymbolFile *CreateInstance(lldb::ObjectFileSP objfile_sp);
 
-  //------------------------------------------------------------------
   // Constructors and Destructors
-  //------------------------------------------------------------------
-  SymbolFileNativePDB(ObjectFile *ofile);
+  SymbolFileNativePDB(lldb::ObjectFileSP objfile_sp);
 
   ~SymbolFileNativePDB() override;
 
@@ -70,16 +66,10 @@ public:
 
   void InitializeObject() override;
 
-  //------------------------------------------------------------------
   // Compile Unit function calls
-  //------------------------------------------------------------------
-
-  uint32_t GetNumCompileUnits() override;
 
   void
   ParseDeclsForContext(lldb_private::CompilerDeclContext decl_ctx) override;
-
-  lldb::CompUnitSP ParseCompileUnitAtIndex(uint32_t index) override;
 
   lldb::LanguageType
   ParseLanguage(lldb_private::CompileUnit &comp_unit) override;
@@ -100,7 +90,7 @@ public:
 
   size_t ParseBlocksRecursive(Function &func) override;
 
-  uint32_t FindGlobalVariables(const ConstString &name,
+  uint32_t FindGlobalVariables(ConstString name,
                                const CompilerDeclContext *parent_decl_ctx,
                                uint32_t max_matches,
                                VariableList &variables) override;
@@ -129,7 +119,7 @@ public:
   size_t GetTypes(SymbolContextScope *sc_scope, lldb::TypeClass type_mask,
                   TypeList &type_list) override;
 
-  uint32_t FindFunctions(const ConstString &name,
+  uint32_t FindFunctions(ConstString name,
                          const CompilerDeclContext *parent_decl_ctx,
                          lldb::FunctionNameType name_type_mask,
                          bool include_inlines, bool append,
@@ -138,19 +128,20 @@ public:
   uint32_t FindFunctions(const RegularExpression &regex, bool include_inlines,
                          bool append, SymbolContextList &sc_list) override;
 
-  uint32_t FindTypes(const ConstString &name,
+  uint32_t FindTypes(ConstString name,
                      const CompilerDeclContext *parent_decl_ctx, bool append,
                      uint32_t max_matches,
                      llvm::DenseSet<SymbolFile *> &searched_symbol_files,
                      TypeMap &types) override;
 
-  size_t FindTypes(const std::vector<CompilerContext> &context, bool append,
-                   TypeMap &types) override;
+  size_t FindTypes(llvm::ArrayRef<CompilerContext> pattern,
+                   LanguageSet languages, bool append, TypeMap &types) override;
 
-  TypeSystem *GetTypeSystemForLanguage(lldb::LanguageType language) override;
+  llvm::Expected<TypeSystem &>
+  GetTypeSystemForLanguage(lldb::LanguageType language) override;
 
   CompilerDeclContext
-  FindNamespace(const ConstString &name,
+  FindNamespace(ConstString name,
                 const CompilerDeclContext *parent_decl_ctx) override;
 
   ConstString GetPluginName() override;
@@ -163,6 +154,9 @@ public:
   void DumpClangAST(Stream &s) override;
 
 private:
+  uint32_t CalculateNumCompileUnits() override;
+
+  lldb::CompUnitSP ParseCompileUnitAtIndex(uint32_t index) override;
 
   size_t FindTypesByName(llvm::StringRef name, uint32_t max_matches,
                          TypeMap &types);
@@ -186,6 +180,9 @@ private:
   lldb::TypeSP CreateArrayType(PdbTypeSymId type_id,
                                const llvm::codeview::ArrayRecord &ar,
                                CompilerType ct);
+  lldb::TypeSP CreateFunctionType(PdbTypeSymId type_id,
+                                  const llvm::codeview::MemberFunctionRecord &pr,
+                                  CompilerType ct);
   lldb::TypeSP CreateProcedureType(PdbTypeSymId type_id,
                                    const llvm::codeview::ProcedureRecord &pr,
                                    CompilerType ct);

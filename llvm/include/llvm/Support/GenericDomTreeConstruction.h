@@ -186,7 +186,7 @@ struct SemiNCAInfo {
     // Add a new tree node for this NodeT, and link it as a child of
     // IDomNode
     return (DT.DomTreeNodes[BB] = IDomNode->addChild(
-        llvm::make_unique<DomTreeNodeBase<NodeT>>(BB, IDomNode)))
+        std::make_unique<DomTreeNodeBase<NodeT>>(BB, IDomNode)))
         .get();
   }
 
@@ -586,7 +586,7 @@ struct SemiNCAInfo {
     NodePtr Root = IsPostDom ? nullptr : DT.Roots[0];
 
     DT.RootNode = (DT.DomTreeNodes[Root] =
-                       llvm::make_unique<DomTreeNodeBase<NodeT>>(Root, nullptr))
+                       std::make_unique<DomTreeNodeBase<NodeT>>(Root, nullptr))
         .get();
     SNCA.attachNewSubtree(DT, DT.RootNode);
   }
@@ -611,7 +611,7 @@ struct SemiNCAInfo {
       // Add a new tree node for this BasicBlock, and link it as a child of
       // IDomNode.
       DT.DomTreeNodes[W] = IDomNode->addChild(
-          llvm::make_unique<DomTreeNodeBase<NodeT>>(W, IDomNode));
+          std::make_unique<DomTreeNodeBase<NodeT>>(W, IDomNode));
     }
   }
 
@@ -663,7 +663,7 @@ struct SemiNCAInfo {
       TreeNodePtr VirtualRoot = DT.getNode(nullptr);
       FromTN =
           (DT.DomTreeNodes[From] = VirtualRoot->addChild(
-               llvm::make_unique<DomTreeNodeBase<NodeT>>(From, VirtualRoot)))
+               std::make_unique<DomTreeNodeBase<NodeT>>(From, VirtualRoot)))
               .get();
       DT.Roots.push_back(From);
     }
@@ -1185,6 +1185,10 @@ struct SemiNCAInfo {
       BUI.FuturePredecessors[U.getTo()].push_back({U.getFrom(), U.getKind()});
     }
 
+#if 0
+    // FIXME: The LLVM_DEBUG macro only plays well with a modular
+    // build of LLVM when the header is marked as textual, but doing
+    // so causes redefinition errors.
     LLVM_DEBUG(dbgs() << "About to apply " << NumLegalized << " updates\n");
     LLVM_DEBUG(if (NumLegalized < 32) for (const auto &U
                                            : reverse(BUI.Updates)) {
@@ -1193,6 +1197,7 @@ struct SemiNCAInfo {
       dbgs() << "\n";
     });
     LLVM_DEBUG(dbgs() << "\n");
+#endif
 
     // Recalculate the DominatorTree when the number of updates
     // exceeds a threshold, which usually makes direct updating slower than
@@ -1218,8 +1223,13 @@ struct SemiNCAInfo {
   static void ApplyNextUpdate(DomTreeT &DT, BatchUpdateInfo &BUI) {
     assert(!BUI.Updates.empty() && "No updates to apply!");
     UpdateT CurrentUpdate = BUI.Updates.pop_back_val();
+#if 0
+    // FIXME: The LLVM_DEBUG macro only plays well with a modular
+    // build of LLVM when the header is marked as textual, but doing
+    // so causes redefinition errors.
     LLVM_DEBUG(dbgs() << "Applying update: ");
     LLVM_DEBUG(CurrentUpdate.dump(); dbgs() << "\n");
+#endif
 
     // Move to the next snapshot of the CFG by removing the reverse-applied
     // current update. Since updates are performed in the same order they are

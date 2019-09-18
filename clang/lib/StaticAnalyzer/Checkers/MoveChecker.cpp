@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/ExprCXX.h"
+#include "clang/Driver/DriverDiagnostic.h"
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
@@ -168,9 +169,9 @@ private:
       // in the first place.
     }
 
-    std::shared_ptr<PathDiagnosticPiece> VisitNode(const ExplodedNode *N,
-                                                   BugReporterContext &BRC,
-                                                   BugReport &BR) override;
+    PathDiagnosticPieceRef VisitNode(const ExplodedNode *N,
+                                     BugReporterContext &BRC,
+                                     PathSensitiveBugReport &BR) override;
 
   private:
     const MoveChecker &Chk;
@@ -186,13 +187,17 @@ private:
   AggressivenessKind Aggressiveness;
 
 public:
-  void setAggressiveness(StringRef Str) {
+  void setAggressiveness(StringRef Str, CheckerManager &Mgr) {
     Aggressiveness =
         llvm::StringSwitch<AggressivenessKind>(Str)
             .Case("KnownsOnly", AK_KnownsOnly)
             .Case("KnownsAndLocals", AK_KnownsAndLocals)
             .Case("All", AK_All)
-            .Default(AK_KnownsAndLocals); // A sane default.
+            .Default(AK_Invalid);
+
+    if (Aggressiveness == AK_Invalid)
+      Mgr.reportInvalidCheckerOptionValue(this, "WarnOn",
+          "either \"KnownsOnly\", \"KnownsAndLocals\" or \"All\" string value");
   };
 
 private:
@@ -221,6 +226,18 @@ private:
 } // end anonymous namespace
 
 REGISTER_MAP_WITH_PROGRAMSTATE(TrackedRegionMap, const MemRegion *, RegionState)
+
+// Define the inter-checker API.
+namespace clang {
+namespace ento {
+namespace move {
+bool isMovedFrom(ProgramStateRef State, const MemRegion *Region) {
+  const RegionState *RS = State->get<TrackedRegionMap>(Region);
+  return RS && (RS->isMoved() || RS->isReported());
+}
+} // namespace move
+} // namespace ento
+} // namespace clang
 
 // If a region is removed all of the subregions needs to be removed too.
 static ProgramStateRef removeFromState(ProgramStateRef State,
@@ -253,9 +270,10 @@ static const MemRegion *unwrapRValueReferenceIndirection(const MemRegion *MR) {
   return MR;
 }
 
-std::shared_ptr<PathDiagnosticPiece>
+PathDiagnosticPieceRef
 MoveChecker::MovedBugVisitor::VisitNode(const ExplodedNode *N,
-                                        BugReporterContext &BRC, BugReport &BR) {
+                                        BugReporterContext &BRC,
+                                        PathSensitiveBugReport &BR) {
   // We need only the last move of the reported object's region.
   // The visitor walks the ExplodedGraph backwards.
   if (Found)
@@ -271,7 +289,7 @@ MoveChecker::MovedBugVisitor::VisitNode(const ExplodedNode *N,
     return nullptr;
 
   // Retrieve the associated statement.
-  const Stmt *S = PathDiagnosticLocation::getStmt(N);
+  const Stmt *S = N->getStmtForDiagnostics();
   if (!S)
     return nullptr;
   Found = true;
@@ -383,7 +401,7 @@ ExplodedNode *MoveChecker::reportBug(const MemRegion *Region,
     PathDiagnosticLocation LocUsedForUniqueing;
     const ExplodedNode *MoveNode = getMoveLocation(N, Region, C);
 
-    if (const Stmt *MoveStmt = PathDiagnosticLocation::getStmt(MoveNode))
+    if (const Stmt *MoveStmt = MoveNode->getStmtForDiagnostics())
       LocUsedForUniqueing = PathDiagnosticLocation::createBegin(
           MoveStmt, C.getSourceManager(), MoveNode->getLocationContext());
 
@@ -411,10 +429,10 @@ ExplodedNode *MoveChecker::reportBug(const MemRegion *Region,
         break;
     }
 
-    auto R =
-        llvm::make_unique<BugReport>(*BT, OS.str(), N, LocUsedForUniqueing,
-                                     MoveNode->getLocationContext()->getDecl());
-    R->addVisitor(llvm::make_unique<MovedBugVisitor>(*this, Region, RD, MK));
+    auto R = std::make_unique<PathSensitiveBugReport>(
+        *BT, OS.str(), N, LocUsedForUniqueing,
+        MoveNode->getLocationContext()->getDecl());
+    R->addVisitor(std::make_unique<MovedBugVisitor>(*this, Region, RD, MK));
     C.emitReport(std::move(R));
     return N;
   }
@@ -735,7 +753,7 @@ void MoveChecker::printState(raw_ostream &Out, ProgramStateRef State,
 void ento::registerMoveChecker(CheckerManager &mgr) {
   MoveChecker *chk = mgr.registerChecker<MoveChecker>();
   chk->setAggressiveness(
-      mgr.getAnalyzerOptions().getCheckerStringOption("WarnOn", "", chk));
+      mgr.getAnalyzerOptions().getCheckerStringOption(chk, "WarnOn"), mgr);
 }
 
 bool ento::shouldRegisterMoveChecker(const LangOptions &LO) {

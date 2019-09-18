@@ -12,6 +12,7 @@
 
 #include "clang/AST/ASTContext.h"
 #include "CXXABI.h"
+#include "Interp/Context.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/ASTTypeTraits.h"
@@ -98,75 +99,60 @@ enum FloatingRank {
   Float16Rank, HalfRank, FloatRank, DoubleRank, LongDoubleRank, Float128Rank
 };
 
-RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
-  if (!CommentsLoaded && ExternalSource) {
-    ExternalSource->ReadComments();
-
-#ifndef NDEBUG
-    ArrayRef<RawComment *> RawComments = Comments.getComments();
-    assert(std::is_sorted(RawComments.begin(), RawComments.end(),
-                          BeforeThanCompare<RawComment>(SourceMgr)));
-#endif
-
-    CommentsLoaded = true;
-  }
-
+/// \returns location that is relevant when searching for Doc comments related
+/// to \p D.
+static SourceLocation getDeclLocForCommentSearch(const Decl *D,
+                                                 SourceManager &SourceMgr) {
   assert(D);
 
   // User can not attach documentation to implicit declarations.
   if (D->isImplicit())
-    return nullptr;
+    return {};
 
   // User can not attach documentation to implicit instantiations.
   if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
     if (FD->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
-      return nullptr;
+      return {};
   }
 
   if (const auto *VD = dyn_cast<VarDecl>(D)) {
     if (VD->isStaticDataMember() &&
         VD->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
-      return nullptr;
+      return {};
   }
 
   if (const auto *CRD = dyn_cast<CXXRecordDecl>(D)) {
     if (CRD->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
-      return nullptr;
+      return {};
   }
 
   if (const auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(D)) {
     TemplateSpecializationKind TSK = CTSD->getSpecializationKind();
     if (TSK == TSK_ImplicitInstantiation ||
         TSK == TSK_Undeclared)
-      return nullptr;
+      return {};
   }
 
   if (const auto *ED = dyn_cast<EnumDecl>(D)) {
     if (ED->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
-      return nullptr;
+      return {};
   }
   if (const auto *TD = dyn_cast<TagDecl>(D)) {
     // When tag declaration (but not definition!) is part of the
     // decl-specifier-seq of some other declaration, it doesn't get comment
     if (TD->isEmbeddedInDeclarator() && !TD->isCompleteDefinition())
-      return nullptr;
+      return {};
   }
   // TODO: handle comments for function parameters properly.
   if (isa<ParmVarDecl>(D))
-    return nullptr;
+    return {};
 
   // TODO: we could look up template parameter documentation in the template
   // documentation.
   if (isa<TemplateTypeParmDecl>(D) ||
       isa<NonTypeTemplateParmDecl>(D) ||
       isa<TemplateTemplateParmDecl>(D))
-    return nullptr;
-
-  ArrayRef<RawComment *> RawComments = Comments.getComments();
-
-  // If there are no comments anywhere, we won't find anything.
-  if (RawComments.empty())
-    return nullptr;
+    return {};
 
   // Find declaration location.
   // For Objective-C declarations we generally don't expect to have multiple
@@ -174,20 +160,19 @@ RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
   // location".
   // For all other declarations multiple declarators are used quite frequently,
   // so we use the location of the identifier as the "declaration location".
-  SourceLocation DeclLoc;
   if (isa<ObjCMethodDecl>(D) || isa<ObjCContainerDecl>(D) ||
       isa<ObjCPropertyDecl>(D) ||
       isa<RedeclarableTemplateDecl>(D) ||
       isa<ClassTemplateSpecializationDecl>(D))
-    DeclLoc = D->getBeginLoc();
+    return D->getBeginLoc();
   else {
-    DeclLoc = D->getLocation();
+    const SourceLocation DeclLoc = D->getLocation();
     if (DeclLoc.isMacroID()) {
       if (isa<TypedefDecl>(D)) {
         // If location of the typedef name is in a macro, it is because being
         // declared via a macro. Try using declaration's starting location as
         // the "declaration location".
-        DeclLoc = D->getBeginLoc();
+        return D->getBeginLoc();
       } else if (const auto *TD = dyn_cast<TagDecl>(D)) {
         // If location of the tag decl is inside a macro, but the spelling of
         // the tag name comes from a macro argument, it looks like a special
@@ -196,85 +181,73 @@ RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
         // attach the comment to the tag decl.
         if (SourceMgr.isMacroArgExpansion(DeclLoc) &&
             TD->isCompleteDefinition())
-          DeclLoc = SourceMgr.getExpansionLoc(DeclLoc);
+          return SourceMgr.getExpansionLoc(DeclLoc);
       }
     }
+    return DeclLoc;
   }
 
+  return {};
+}
+
+RawComment *ASTContext::getRawCommentForDeclNoCacheImpl(
+    const Decl *D, const SourceLocation RepresentativeLocForDecl,
+    const std::map<unsigned, RawComment *> &CommentsInTheFile) const {
   // If the declaration doesn't map directly to a location in a file, we
   // can't find the comment.
-  if (DeclLoc.isInvalid() || !DeclLoc.isFileID())
+  if (RepresentativeLocForDecl.isInvalid() ||
+      !RepresentativeLocForDecl.isFileID())
     return nullptr;
 
-  // Find the comment that occurs just after this declaration.
-  ArrayRef<RawComment *>::iterator Comment;
-  {
-    // When searching for comments during parsing, the comment we are looking
-    // for is usually among the last two comments we parsed -- check them
-    // first.
-    RawComment CommentAtDeclLoc(
-        SourceMgr, SourceRange(DeclLoc), LangOpts.CommentOpts, false);
-    BeforeThanCompare<RawComment> Compare(SourceMgr);
-    ArrayRef<RawComment *>::iterator MaybeBeforeDecl = RawComments.end() - 1;
-    bool Found = Compare(*MaybeBeforeDecl, &CommentAtDeclLoc);
-    if (!Found && RawComments.size() >= 2) {
-      MaybeBeforeDecl--;
-      Found = Compare(*MaybeBeforeDecl, &CommentAtDeclLoc);
-    }
-
-    if (Found) {
-      Comment = MaybeBeforeDecl + 1;
-      assert(Comment == std::lower_bound(RawComments.begin(), RawComments.end(),
-                                         &CommentAtDeclLoc, Compare));
-    } else {
-      // Slow path.
-      Comment = std::lower_bound(RawComments.begin(), RawComments.end(),
-                                 &CommentAtDeclLoc, Compare);
-    }
-  }
+  // If there are no comments anywhere, we won't find anything.
+  if (CommentsInTheFile.empty())
+    return nullptr;
 
   // Decompose the location for the declaration and find the beginning of the
   // file buffer.
-  std::pair<FileID, unsigned> DeclLocDecomp = SourceMgr.getDecomposedLoc(DeclLoc);
+  const std::pair<FileID, unsigned> DeclLocDecomp =
+      SourceMgr.getDecomposedLoc(RepresentativeLocForDecl);
+
+  // Slow path.
+  auto OffsetCommentBehindDecl =
+      CommentsInTheFile.lower_bound(DeclLocDecomp.second);
 
   // First check whether we have a trailing comment.
-  if (Comment != RawComments.end() &&
-      ((*Comment)->isDocumentation() || LangOpts.CommentOpts.ParseAllComments)
-      && (*Comment)->isTrailingComment() &&
-      (isa<FieldDecl>(D) || isa<EnumConstantDecl>(D) || isa<VarDecl>(D) ||
-       isa<ObjCMethodDecl>(D) || isa<ObjCPropertyDecl>(D))) {
-    std::pair<FileID, unsigned> CommentBeginDecomp
-      = SourceMgr.getDecomposedLoc((*Comment)->getSourceRange().getBegin());
-    // Check that Doxygen trailing comment comes after the declaration, starts
-    // on the same line and in the same file as the declaration.
-    if (DeclLocDecomp.first == CommentBeginDecomp.first &&
-        SourceMgr.getLineNumber(DeclLocDecomp.first, DeclLocDecomp.second)
-          == SourceMgr.getLineNumber(CommentBeginDecomp.first,
-                                     CommentBeginDecomp.second)) {
-      return *Comment;
+  if (OffsetCommentBehindDecl != CommentsInTheFile.end()) {
+    RawComment *CommentBehindDecl = OffsetCommentBehindDecl->second;
+    if ((CommentBehindDecl->isDocumentation() ||
+         LangOpts.CommentOpts.ParseAllComments) &&
+        CommentBehindDecl->isTrailingComment() &&
+        (isa<FieldDecl>(D) || isa<EnumConstantDecl>(D) || isa<VarDecl>(D) ||
+         isa<ObjCMethodDecl>(D) || isa<ObjCPropertyDecl>(D))) {
+
+      // Check that Doxygen trailing comment comes after the declaration, starts
+      // on the same line and in the same file as the declaration.
+      if (SourceMgr.getLineNumber(DeclLocDecomp.first, DeclLocDecomp.second) ==
+          Comments.getCommentBeginLine(CommentBehindDecl, DeclLocDecomp.first,
+                                       OffsetCommentBehindDecl->first)) {
+        return CommentBehindDecl;
+      }
     }
   }
 
   // The comment just after the declaration was not a trailing comment.
   // Let's look at the previous comment.
-  if (Comment == RawComments.begin())
+  if (OffsetCommentBehindDecl == CommentsInTheFile.begin())
     return nullptr;
-  --Comment;
+
+  auto OffsetCommentBeforeDecl = --OffsetCommentBehindDecl;
+  RawComment *CommentBeforeDecl = OffsetCommentBeforeDecl->second;
 
   // Check that we actually have a non-member Doxygen comment.
-  if (!((*Comment)->isDocumentation() ||
+  if (!(CommentBeforeDecl->isDocumentation() ||
         LangOpts.CommentOpts.ParseAllComments) ||
-      (*Comment)->isTrailingComment())
+      CommentBeforeDecl->isTrailingComment())
     return nullptr;
 
   // Decompose the end of the comment.
-  std::pair<FileID, unsigned> CommentEndDecomp
-    = SourceMgr.getDecomposedLoc((*Comment)->getSourceRange().getEnd());
-
-  // If the comment and the declaration aren't in the same file, then they
-  // aren't related.
-  if (DeclLocDecomp.first != CommentEndDecomp.first)
-    return nullptr;
+  const unsigned CommentEndOffset =
+      Comments.getCommentEndOffset(CommentBeforeDecl);
 
   // Get the corresponding buffer.
   bool Invalid = false;
@@ -284,25 +257,49 @@ RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
     return nullptr;
 
   // Extract text between the comment and declaration.
-  StringRef Text(Buffer + CommentEndDecomp.second,
-                 DeclLocDecomp.second - CommentEndDecomp.second);
+  StringRef Text(Buffer + CommentEndOffset,
+                 DeclLocDecomp.second - CommentEndOffset);
 
   // There should be no other declarations or preprocessor directives between
   // comment and declaration.
   if (Text.find_first_of(";{}#@") != StringRef::npos)
     return nullptr;
 
-  return *Comment;
+  return CommentBeforeDecl;
+}
+
+RawComment *ASTContext::getRawCommentForDeclNoCache(const Decl *D) const {
+  const SourceLocation DeclLoc = getDeclLocForCommentSearch(D, SourceMgr);
+
+  // If the declaration doesn't map directly to a location in a file, we
+  // can't find the comment.
+  if (DeclLoc.isInvalid() || !DeclLoc.isFileID())
+    return nullptr;
+
+  if (ExternalSource && !CommentsLoaded) {
+    ExternalSource->ReadComments();
+    CommentsLoaded = true;
+  }
+
+  if (Comments.empty())
+    return nullptr;
+
+  const FileID File = SourceMgr.getDecomposedLoc(DeclLoc).first;
+  const auto CommentsInThisFile = Comments.getCommentsInFile(File);
+  if (!CommentsInThisFile || CommentsInThisFile->empty())
+    return nullptr;
+
+  return getRawCommentForDeclNoCacheImpl(D, DeclLoc, *CommentsInThisFile);
 }
 
 /// If we have a 'templated' declaration for a template, adjust 'D' to
 /// refer to the actual template.
 /// If we have an implicit instantiation, adjust 'D' to refer to template.
-static const Decl *adjustDeclToTemplate(const Decl *D) {
-  if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+static const Decl &adjustDeclToTemplate(const Decl &D) {
+  if (const auto *FD = dyn_cast<FunctionDecl>(&D)) {
     // Is this function declaration part of a function template?
     if (const FunctionTemplateDecl *FTD = FD->getDescribedFunctionTemplate())
-      return FTD;
+      return *FTD;
 
     // Nothing to do if function is not an implicit instantiation.
     if (FD->getTemplateSpecializationKind() != TSK_ImplicitInstantiation)
@@ -310,28 +307,28 @@ static const Decl *adjustDeclToTemplate(const Decl *D) {
 
     // Function is an implicit instantiation of a function template?
     if (const FunctionTemplateDecl *FTD = FD->getPrimaryTemplate())
-      return FTD;
+      return *FTD;
 
     // Function is instantiated from a member definition of a class template?
     if (const FunctionDecl *MemberDecl =
             FD->getInstantiatedFromMemberFunction())
-      return MemberDecl;
+      return *MemberDecl;
 
     return D;
   }
-  if (const auto *VD = dyn_cast<VarDecl>(D)) {
+  if (const auto *VD = dyn_cast<VarDecl>(&D)) {
     // Static data member is instantiated from a member definition of a class
     // template?
     if (VD->isStaticDataMember())
       if (const VarDecl *MemberDecl = VD->getInstantiatedFromStaticDataMember())
-        return MemberDecl;
+        return *MemberDecl;
 
     return D;
   }
-  if (const auto *CRD = dyn_cast<CXXRecordDecl>(D)) {
+  if (const auto *CRD = dyn_cast<CXXRecordDecl>(&D)) {
     // Is this class declaration part of a class template?
     if (const ClassTemplateDecl *CTD = CRD->getDescribedClassTemplate())
-      return CTD;
+      return *CTD;
 
     // Class is an implicit instantiation of a class template or partial
     // specialization?
@@ -341,23 +338,23 @@ static const Decl *adjustDeclToTemplate(const Decl *D) {
       llvm::PointerUnion<ClassTemplateDecl *,
                          ClassTemplatePartialSpecializationDecl *>
           PU = CTSD->getSpecializedTemplateOrPartial();
-      return PU.is<ClassTemplateDecl*>() ?
-          static_cast<const Decl*>(PU.get<ClassTemplateDecl *>()) :
-          static_cast<const Decl*>(
-              PU.get<ClassTemplatePartialSpecializationDecl *>());
+      return PU.is<ClassTemplateDecl *>()
+                 ? *static_cast<const Decl *>(PU.get<ClassTemplateDecl *>())
+                 : *static_cast<const Decl *>(
+                       PU.get<ClassTemplatePartialSpecializationDecl *>());
     }
 
     // Class is instantiated from a member definition of a class template?
     if (const MemberSpecializationInfo *Info =
-                   CRD->getMemberSpecializationInfo())
-      return Info->getInstantiatedFrom();
+            CRD->getMemberSpecializationInfo())
+      return *Info->getInstantiatedFrom();
 
     return D;
   }
-  if (const auto *ED = dyn_cast<EnumDecl>(D)) {
+  if (const auto *ED = dyn_cast<EnumDecl>(&D)) {
     // Enum is instantiated from a member definition of a class template?
     if (const EnumDecl *MemberDecl = ED->getInstantiatedFromMemberEnum())
-      return MemberDecl;
+      return *MemberDecl;
 
     return D;
   }
@@ -368,72 +365,81 @@ static const Decl *adjustDeclToTemplate(const Decl *D) {
 const RawComment *ASTContext::getRawCommentForAnyRedecl(
                                                 const Decl *D,
                                                 const Decl **OriginalDecl) const {
-  D = adjustDeclToTemplate(D);
+  if (!D) {
+    if (OriginalDecl)
+      OriginalDecl = nullptr;
+    return nullptr;
+  }
 
-  // Check whether we have cached a comment for this declaration already.
+  D = &adjustDeclToTemplate(*D);
+
+  // Any comment directly attached to D?
   {
-    llvm::DenseMap<const Decl *, RawCommentAndCacheFlags>::iterator Pos =
-        RedeclComments.find(D);
-    if (Pos != RedeclComments.end()) {
-      const RawCommentAndCacheFlags &Raw = Pos->second;
-      if (Raw.getKind() != RawCommentAndCacheFlags::NoCommentInDecl) {
-        if (OriginalDecl)
-          *OriginalDecl = Raw.getOriginalDecl();
-        return Raw.getRaw();
-      }
+    auto DeclComment = DeclRawComments.find(D);
+    if (DeclComment != DeclRawComments.end()) {
+      if (OriginalDecl)
+        *OriginalDecl = D;
+      return DeclComment->second;
     }
   }
 
-  // Search for comments attached to declarations in the redeclaration chain.
-  const RawComment *RC = nullptr;
-  const Decl *OriginalDeclForRC = nullptr;
-  for (auto I : D->redecls()) {
-    llvm::DenseMap<const Decl *, RawCommentAndCacheFlags>::iterator Pos =
-        RedeclComments.find(I);
-    if (Pos != RedeclComments.end()) {
-      const RawCommentAndCacheFlags &Raw = Pos->second;
-      if (Raw.getKind() != RawCommentAndCacheFlags::NoCommentInDecl) {
-        RC = Raw.getRaw();
-        OriginalDeclForRC = Raw.getOriginalDecl();
-        break;
-      }
-    } else {
-      RC = getRawCommentForDeclNoCache(I);
-      OriginalDeclForRC = I;
-      RawCommentAndCacheFlags Raw;
-      if (RC) {
-        // Call order swapped to work around ICE in VS2015 RTM (Release Win32)
-        // https://connect.microsoft.com/VisualStudio/feedback/details/1741530
-        Raw.setKind(RawCommentAndCacheFlags::FromDecl);
-        Raw.setRaw(RC);
-      } else
-        Raw.setKind(RawCommentAndCacheFlags::NoCommentInDecl);
-      Raw.setOriginalDecl(I);
-      RedeclComments[I] = Raw;
-      if (RC)
-        break;
+  // Any comment attached to any redeclaration of D?
+  const Decl *CanonicalD = D->getCanonicalDecl();
+  if (!CanonicalD)
+    return nullptr;
+
+  {
+    auto RedeclComment = RedeclChainComments.find(CanonicalD);
+    if (RedeclComment != RedeclChainComments.end()) {
+      if (OriginalDecl)
+        *OriginalDecl = RedeclComment->second;
+      auto CommentAtRedecl = DeclRawComments.find(RedeclComment->second);
+      assert(CommentAtRedecl != DeclRawComments.end() &&
+             "This decl is supposed to have comment attached.");
+      return CommentAtRedecl->second;
     }
   }
 
-  // If we found a comment, it should be a documentation comment.
-  assert(!RC || RC->isDocumentation() || LangOpts.CommentOpts.ParseAllComments);
+  // Any redeclarations of D that we haven't checked for comments yet?
+  // We can't use DenseMap::iterator directly since it'd get invalid.
+  auto LastCheckedRedecl = [this, CanonicalD]() -> const Decl * {
+    auto LookupRes = CommentlessRedeclChains.find(CanonicalD);
+    if (LookupRes != CommentlessRedeclChains.end())
+      return LookupRes->second;
+    return nullptr;
+  }();
+
+  for (const auto Redecl : D->redecls()) {
+    assert(Redecl);
+    // Skip all redeclarations that have been checked previously.
+    if (LastCheckedRedecl) {
+      if (LastCheckedRedecl == Redecl) {
+        LastCheckedRedecl = nullptr;
+      }
+      continue;
+    }
+    const RawComment *RedeclComment = getRawCommentForDeclNoCache(Redecl);
+    if (RedeclComment) {
+      cacheRawCommentForDecl(*Redecl, *RedeclComment);
+      if (OriginalDecl)
+        *OriginalDecl = Redecl;
+      return RedeclComment;
+    }
+    CommentlessRedeclChains[CanonicalD] = Redecl;
+  }
 
   if (OriginalDecl)
-    *OriginalDecl = OriginalDeclForRC;
+    *OriginalDecl = nullptr;
+  return nullptr;
+}
 
-  // Update cache for every declaration in the redeclaration chain.
-  RawCommentAndCacheFlags Raw;
-  Raw.setRaw(RC);
-  Raw.setKind(RawCommentAndCacheFlags::FromRedecl);
-  Raw.setOriginalDecl(OriginalDeclForRC);
-
-  for (auto I : D->redecls()) {
-    RawCommentAndCacheFlags &R = RedeclComments[I];
-    if (R.getKind() == RawCommentAndCacheFlags::NoCommentInDecl)
-      R = Raw;
-  }
-
-  return RC;
+void ASTContext::cacheRawCommentForDecl(const Decl &OriginalD,
+                                        const RawComment &Comment) const {
+  assert(Comment.isDocumentation() || LangOpts.CommentOpts.ParseAllComments);
+  DeclRawComments.try_emplace(&OriginalD, &Comment);
+  const Decl *const CanonicalDecl = OriginalD.getCanonicalDecl();
+  RedeclChainComments.try_emplace(CanonicalDecl, &OriginalD);
+  CommentlessRedeclChains.erase(CanonicalDecl);
 }
 
 static void addRedeclaredMethods(const ObjCMethodDecl *ObjCMethod,
@@ -449,6 +455,52 @@ static void addRedeclaredMethods(const ObjCMethodDecl *ObjCMethod,
             Ext->getMethod(ObjCMethod->getSelector(),
                                   ObjCMethod->isInstanceMethod()))
         Redeclared.push_back(RedeclaredMethod);
+    }
+  }
+}
+
+void ASTContext::attachCommentsToJustParsedDecls(ArrayRef<Decl *> Decls,
+                                                 const Preprocessor *PP) {
+  if (Comments.empty() || Decls.empty())
+    return;
+
+  // See if there are any new comments that are not attached to a decl.
+  // The location doesn't have to be precise - we care only about the file.
+  const FileID File =
+      SourceMgr.getDecomposedLoc((*Decls.begin())->getLocation()).first;
+  auto CommentsInThisFile = Comments.getCommentsInFile(File);
+  if (!CommentsInThisFile || CommentsInThisFile->empty() ||
+      CommentsInThisFile->rbegin()->second->isAttached())
+    return;
+
+  // There is at least one comment not attached to a decl.
+  // Maybe it should be attached to one of Decls?
+  //
+  // Note that this way we pick up not only comments that precede the
+  // declaration, but also comments that *follow* the declaration -- thanks to
+  // the lookahead in the lexer: we've consumed the semicolon and looked
+  // ahead through comments.
+
+  for (const Decl *D : Decls) {
+    assert(D);
+    if (D->isInvalidDecl())
+      continue;
+
+    D = &adjustDeclToTemplate(*D);
+
+    const SourceLocation DeclLoc = getDeclLocForCommentSearch(D, SourceMgr);
+
+    if (DeclLoc.isInvalid() || !DeclLoc.isFileID())
+      continue;
+
+    if (DeclRawComments.count(D) > 0)
+      continue;
+
+    if (RawComment *const DocComment =
+            getRawCommentForDeclNoCacheImpl(D, DeclLoc, *CommentsInThisFile)) {
+      cacheRawCommentForDecl(*D, *DocComment);
+      comments::FullComment *FC = DocComment->parse(*this, PP, D);
+      ParsedComments[D->getCanonicalDecl()] = FC;
     }
   }
 }
@@ -476,9 +528,9 @@ comments::FullComment *ASTContext::getLocalCommentForDeclUncached(const Decl *D)
 comments::FullComment *ASTContext::getCommentForDecl(
                                               const Decl *D,
                                               const Preprocessor *PP) const {
-  if (D->isInvalidDecl())
+  if (!D || D->isInvalidDecl())
     return nullptr;
-  D = adjustDeclToTemplate(D);
+  D = &adjustDeclToTemplate(*D);
 
   const Decl *Canonical = D->getCanonicalDecl();
   llvm::DenseMap<const Decl *, comments::FullComment *>::iterator Pos =
@@ -493,7 +545,7 @@ comments::FullComment *ASTContext::getCommentForDecl(
     return Pos->second;
   }
 
-  const Decl *OriginalDecl;
+  const Decl *OriginalDecl = nullptr;
 
   const RawComment *RC = getRawCommentForAnyRedecl(D, &OriginalDecl);
   if (!RC) {
@@ -572,7 +624,7 @@ comments::FullComment *ASTContext::getCommentForDecl(
   // should parse the comment in context of that other Decl.  This is important
   // because comments can contain references to parameter names which can be
   // different across redeclarations.
-  if (D != OriginalDecl)
+  if (D != OriginalDecl && OriginalDecl)
     return getCommentForDecl(OriginalDecl, PP);
 
   comments::FullComment *FC = RC->parse(*this, PP, D);
@@ -732,6 +784,13 @@ CXXABI *ASTContext::createCXXABI(const TargetInfo &T) {
   llvm_unreachable("Invalid CXXABI type!");
 }
 
+interp::Context &ASTContext::getInterpContext() {
+  if (!InterpContext) {
+    InterpContext.reset(new interp::Context(*this));
+  }
+  return *InterpContext.get();
+}
+
 static const LangASMap *getAddressSpaceMap(const TargetInfo &T,
                                            const LangOptions &LOpts) {
   if (LOpts.FakeAddressSpaceMap) {
@@ -821,6 +880,9 @@ ASTContext::~ASTContext() {
 
   for (const auto &Value : ModuleInitializers)
     Value.second->~PerModuleInitializers();
+
+  for (APValue *Value : APValueCleanups)
+    Value->~APValue();
 }
 
 class ASTContext::ParentMap {
@@ -899,7 +961,7 @@ void ASTContext::setTraversalScope(const std::vector<Decl *> &TopLevelDecls) {
   Parents.reset();
 }
 
-void ASTContext::AddDeallocation(void (*Callback)(void*), void *Data) {
+void ASTContext::AddDeallocation(void (*Callback)(void *), void *Data) const {
   Deallocations.push_back({Callback, Data});
 }
 
@@ -1290,6 +1352,12 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
 #include "clang/Basic/OpenCLExtensionTypes.def"
   }
 
+  if (Target.hasAArch64SVETypes()) {
+#define SVE_TYPE(Name, Id, SingletonId) \
+    InitBuiltinType(SingletonId, BuiltinType::Id);
+#include "clang/Basic/AArch64SVEACLETypes.def"
+  }
+
   // Builtin type for __objc_yes and __objc_no
   ObjCBuiltinBoolTy = (Target.useSignedCharForObjCBool() ?
                        SignedCharTy : BoolTy);
@@ -1375,24 +1443,6 @@ ASTContext::setTemplateOrSpecializationInfo(VarDecl *Inst,
   assert(!TemplateOrInstantiation[Inst] &&
          "Already noted what the variable was instantiated from");
   TemplateOrInstantiation[Inst] = TSI;
-}
-
-FunctionDecl *ASTContext::getClassScopeSpecializationPattern(
-                                                     const FunctionDecl *FD){
-  assert(FD && "Specialization is 0");
-  llvm::DenseMap<const FunctionDecl*, FunctionDecl *>::const_iterator Pos
-    = ClassScopeSpecializationPattern.find(FD);
-  if (Pos == ClassScopeSpecializationPattern.end())
-    return nullptr;
-
-  return Pos->second;
-}
-
-void ASTContext::setClassScopeSpecializationPattern(FunctionDecl *FD,
-                                        FunctionDecl *Pattern) {
-  assert(FD && "Specialization is 0");
-  assert(Pattern && "Class scope specialization pattern is 0");
-  ClassScopeSpecializationPattern[FD] = Pattern;
 }
 
 NamedDecl *
@@ -1534,8 +1584,14 @@ const llvm::fltSemantics &ASTContext::getFloatTypeSemantics(QualType T) const {
     return Target->getHalfFormat();
   case BuiltinType::Float:      return Target->getFloatFormat();
   case BuiltinType::Double:     return Target->getDoubleFormat();
-  case BuiltinType::LongDouble: return Target->getLongDoubleFormat();
-  case BuiltinType::Float128:   return Target->getFloat128Format();
+  case BuiltinType::LongDouble:
+    if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice)
+      return AuxTarget->getLongDoubleFormat();
+    return Target->getLongDoubleFormat();
+  case BuiltinType::Float128:
+    if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice)
+      return AuxTarget->getFloat128Format();
+    return Target->getFloat128Format();
   }
 }
 
@@ -1596,8 +1652,10 @@ CharUnits ASTContext::getDeclAlign(const Decl *D, bool ForAlignof) const {
       if (BaseT.getQualifiers().hasUnaligned())
         Align = Target->getCharWidth();
       if (const auto *VD = dyn_cast<VarDecl>(D)) {
-        if (VD->hasGlobalStorage() && !ForAlignof)
-          Align = std::max(Align, getTargetInfo().getMinGlobalAlign());
+        if (VD->hasGlobalStorage() && !ForAlignof) {
+          uint64_t TypeSize = getTypeSize(T.getTypePtr());
+          Align = std::max(Align, getTargetInfo().getMinGlobalAlign(TypeSize));
+        }
       }
     }
 
@@ -1922,8 +1980,15 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       Align = Target->getDoubleAlign();
       break;
     case BuiltinType::LongDouble:
-      Width = Target->getLongDoubleWidth();
-      Align = Target->getLongDoubleAlign();
+      if (getLangOpts().OpenMP && getLangOpts().OpenMPIsDevice &&
+          (Target->getLongDoubleWidth() != AuxTarget->getLongDoubleWidth() ||
+           Target->getLongDoubleAlign() != AuxTarget->getLongDoubleAlign())) {
+        Width = AuxTarget->getLongDoubleWidth();
+        Align = AuxTarget->getLongDoubleAlign();
+      } else {
+        Width = Target->getLongDoubleWidth();
+        Align = Target->getLongDoubleAlign();
+      }
       break;
     case BuiltinType::Float128:
       if (Target->hasFloat128Type() || !getLangOpts().OpenMP ||
@@ -1963,6 +2028,25 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       Width = Target->getPointerWidth(AS);
       Align = Target->getPointerAlign(AS);
       break;
+    // The SVE types are effectively target-specific.  The length of an
+    // SVE_VECTOR_TYPE is only known at runtime, but it is always a multiple
+    // of 128 bits.  There is one predicate bit for each vector byte, so the
+    // length of an SVE_PREDICATE_TYPE is always a multiple of 16 bits.
+    //
+    // Because the length is only known at runtime, we use a dummy value
+    // of 0 for the static length.  The alignment values are those defined
+    // by the Procedure Call Standard for the Arm Architecture.
+#define SVE_VECTOR_TYPE(Name, Id, SingletonId, ElKind, ElBits, IsSigned, IsFP)\
+    case BuiltinType::Id: \
+      Width = 0; \
+      Align = 128; \
+      break;
+#define SVE_PREDICATE_TYPE(Name, Id, SingletonId, ElKind) \
+    case BuiltinType::Id: \
+      Width = 0; \
+      Align = 16; \
+      break;
+#include "clang/Basic/AArch64SVEACLETypes.def"
     }
     break;
   case Type::ObjCObjectPointer:
@@ -2059,6 +2143,10 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
   case Type::Paren:
     return getTypeInfo(cast<ParenType>(T)->getInnerType().getTypePtr());
 
+  case Type::MacroQualified:
+    return getTypeInfo(
+        cast<MacroQualifiedType>(T)->getUnderlyingType().getTypePtr());
+
   case Type::ObjCTypeParam:
     return getTypeInfo(cast<ObjCTypeParamType>(T)->desugar().getTypePtr());
 
@@ -2136,7 +2224,7 @@ unsigned ASTContext::getTypeUnadjustedAlign(const Type *T) const {
     const ASTRecordLayout &Layout = getASTObjCInterfaceLayout(ObjCI->getDecl());
     UnadjustedAlign = toBits(Layout.getUnadjustedAlignment());
   } else {
-    UnadjustedAlign = getTypeAlign(T);
+    UnadjustedAlign = getTypeAlign(T->getUnqualifiedDesugaredType());
   }
 
   MemoizedUnadjustedAlign[T] = UnadjustedAlign;
@@ -2235,7 +2323,8 @@ unsigned ASTContext::getTargetDefaultAlignForAttributeAligned() const {
 /// getAlignOfGlobalVar - Return the alignment in bits that should be given
 /// to a global variable of the specified type.
 unsigned ASTContext::getAlignOfGlobalVar(QualType T) const {
-  return std::max(getTypeAlign(T), getTargetInfo().getMinGlobalAlign());
+  uint64_t TypeSize = getTypeSize(T.getTypePtr());
+  return std::max(getTypeAlign(T), getTargetInfo().getMinGlobalAlign(TypeSize));
 }
 
 /// getAlignOfGlobalVarInChars - Return the alignment in characters that
@@ -2576,7 +2665,7 @@ ASTContext::getBlockVarCopyInit(const VarDecl*VD) const {
   return {nullptr, false};
 }
 
-/// Set the copy inialization expression of a block var decl.
+/// Set the copy initialization expression of a block var decl.
 void ASTContext::setBlockVarCopyInit(const VarDecl*VD, Expr *CopyExpr,
                                      bool CanThrow) {
   assert(VD && CopyExpr && "Passed null params");
@@ -2764,6 +2853,12 @@ QualType ASTContext::getFunctionTypeWithExceptionSpec(
   if (const auto *PT = dyn_cast<ParenType>(Orig))
     return getParenType(
         getFunctionTypeWithExceptionSpec(PT->getInnerType(), ESI));
+
+  // Might be wrapped in a macro qualified type.
+  if (const auto *MQT = dyn_cast<MacroQualifiedType>(Orig))
+    return getMacroQualifiedType(
+        getFunctionTypeWithExceptionSpec(MQT->getUnderlyingType(), ESI),
+        MQT->getMacroIdentifier());
 
   // Might have a calling-convention attribute.
   if (const auto *AT = dyn_cast<AttributedType>(Orig))
@@ -3741,7 +3836,10 @@ QualType ASTContext::getFunctionTypeInternal(
         break;
       }
 
-      case EST_DynamicNone: case EST_BasicNoexcept: case EST_NoexceptTrue:
+      case EST_DynamicNone:
+      case EST_BasicNoexcept:
+      case EST_NoexceptTrue:
+      case EST_NoThrow:
         CanonicalEPI.ExceptionSpec.Type = EST_BasicNoexcept;
         break;
 
@@ -3940,7 +4038,7 @@ QualType ASTContext::getAttributedType(attr::Kind attrKind,
 
   QualType canon = getCanonicalType(equivalentType);
   type = new (*this, TypeAlignment)
-           AttributedType(canon, attrKind, modifiedType, equivalentType);
+      AttributedType(canon, attrKind, modifiedType, equivalentType);
 
   Types.push_back(type);
   AttributedTypes.InsertNode(type, insertPos);
@@ -4221,6 +4319,19 @@ ASTContext::getParenType(QualType InnerType) const {
   return QualType(T, 0);
 }
 
+QualType
+ASTContext::getMacroQualifiedType(QualType UnderlyingTy,
+                                  const IdentifierInfo *MacroII) const {
+  QualType Canon = UnderlyingTy;
+  if (!Canon.isCanonical())
+    Canon = getCanonicalType(UnderlyingTy);
+
+  auto *newType = new (*this, TypeAlignment)
+      MacroQualifiedType(UnderlyingTy, Canon, MacroII);
+  Types.push_back(newType);
+  return QualType(newType, 0);
+}
+
 QualType ASTContext::getDependentNameType(ElaboratedTypeKeyword Keyword,
                                           NestedNameSpecifier *NNS,
                                           const IdentifierInfo *Name,
@@ -4358,7 +4469,13 @@ QualType ASTContext::getPackExpansionType(QualType Pattern,
   llvm::FoldingSetNodeID ID;
   PackExpansionType::Profile(ID, Pattern, NumExpansions);
 
-  assert(Pattern->containsUnexpandedParameterPack() &&
+  // A deduced type can deduce to a pack, eg
+  //   auto ...x = some_pack;
+  // That declaration isn't (yet) valid, but is created as part of building an
+  // init-capture pack:
+  //   [...x = some_pack] {}
+  assert((Pattern->containsUnexpandedParameterPack() ||
+          Pattern->getContainedDeducedType()) &&
          "Pack expansions must expand one or more parameter packs");
   void *InsertPos = nullptr;
   PackExpansionType *T
@@ -4858,19 +4975,20 @@ QualType ASTContext::getUnaryTransformType(QualType BaseType,
 /// deduced to the given type, or to the canonical undeduced 'auto' type, or the
 /// canonical deduced-but-dependent 'auto' type.
 QualType ASTContext::getAutoType(QualType DeducedType, AutoTypeKeyword Keyword,
-                                 bool IsDependent) const {
+                                 bool IsDependent, bool IsPack) const {
+  assert((!IsPack || IsDependent) && "only use IsPack for a dependent pack");
   if (DeducedType.isNull() && Keyword == AutoTypeKeyword::Auto && !IsDependent)
     return getAutoDeductType();
 
   // Look in the folding set for an existing type.
   void *InsertPos = nullptr;
   llvm::FoldingSetNodeID ID;
-  AutoType::Profile(ID, DeducedType, Keyword, IsDependent);
+  AutoType::Profile(ID, DeducedType, Keyword, IsDependent, IsPack);
   if (AutoType *AT = AutoTypes.FindNodeOrInsertPos(ID, InsertPos))
     return QualType(AT, 0);
 
   auto *AT = new (*this, TypeAlignment)
-      AutoType(DeducedType, Keyword, IsDependent);
+      AutoType(DeducedType, Keyword, IsDependent, IsPack);
   Types.push_back(AT);
   if (InsertPos)
     AutoTypes.InsertNode(AT, InsertPos);
@@ -4932,7 +5050,7 @@ QualType ASTContext::getAutoDeductType() const {
   if (AutoDeductTy.isNull())
     AutoDeductTy = QualType(
       new (*this, TypeAlignment) AutoType(QualType(), AutoTypeKeyword::Auto,
-                                          /*dependent*/false),
+                                          /*dependent*/false, /*pack*/false),
       0);
   return AutoDeductTy;
 }
@@ -5220,6 +5338,11 @@ ASTContext::getNameForTemplate(TemplateName Name,
     return DeclarationNameInfo((*Storage->begin())->getDeclName(), NameLoc);
   }
 
+  case TemplateName::AssumedTemplate: {
+    AssumedTemplateStorage *Storage = Name.getAsAssumedTemplateName();
+    return DeclarationNameInfo(Storage->getDeclName(), NameLoc);
+  }
+
   case TemplateName::DependentTemplate: {
     DependentTemplateName *DTN = Name.getAsDependentTemplateName();
     DeclarationName DName;
@@ -5267,7 +5390,8 @@ TemplateName ASTContext::getCanonicalTemplateName(TemplateName Name) const {
   }
 
   case TemplateName::OverloadedTemplate:
-    llvm_unreachable("cannot canonicalize overloaded template");
+  case TemplateName::AssumedTemplate:
+    llvm_unreachable("cannot canonicalize unresolved template");
 
   case TemplateName::DependentTemplate: {
     DependentTemplateName *DTN = Name.getAsDependentTemplateName();
@@ -6291,12 +6415,13 @@ void ASTContext::getObjCEncodingForMethodParameter(Decl::ObjCDeclQualifier QT,
   // Encode type qualifer, 'in', 'inout', etc. for the parameter.
   getObjCEncodingForTypeQualifier(QT, S);
   // Encode parameter type.
-  getObjCEncodingForTypeImpl(T, S, true, true, nullptr,
-                             true     /*OutermostType*/,
-                             false    /*EncodingProperty*/,
-                             false    /*StructField*/,
-                             Extended /*EncodeBlockParameters*/,
-                             Extended /*EncodeClassNames*/);
+  ObjCEncOptions Options = ObjCEncOptions()
+                               .setExpandPointedToStructures()
+                               .setExpandStructures()
+                               .setIsOutermostType();
+  if (Extended)
+    Options.setEncodeBlockParameters().setEncodeClassNames();
+  getObjCEncodingForTypeImpl(T, S, Options, /*Field=*/nullptr);
 }
 
 /// getObjCEncodingForMethodDecl - Return the encoded type for this method
@@ -6488,9 +6613,12 @@ void ASTContext::getObjCEncodingForType(QualType T, std::string& S,
   // directly pointed to, and expanding embedded structures. Note that
   // these rules are sufficient to prevent recursive encoding of the
   // same type.
-  getObjCEncodingForTypeImpl(T, S, true, true, Field,
-                             true /* outermost type */, false, false,
-                             false, false, false, NotEncodedT);
+  getObjCEncodingForTypeImpl(T, S,
+                             ObjCEncOptions()
+                                 .setExpandPointedToStructures()
+                                 .setExpandStructures()
+                                 .setIsOutermostType(),
+                             Field, NotEncodedT);
 }
 
 void ASTContext::getObjCEncodingForPropertyType(QualType T,
@@ -6498,13 +6626,18 @@ void ASTContext::getObjCEncodingForPropertyType(QualType T,
   // Encode result type.
   // GCC has some special rules regarding encoding of properties which
   // closely resembles encoding of ivars.
-  getObjCEncodingForTypeImpl(T, S, true, true, nullptr,
-                             true /* outermost type */,
-                             true /* encoding property */);
+  getObjCEncodingForTypeImpl(T, S,
+                             ObjCEncOptions()
+                                 .setExpandPointedToStructures()
+                                 .setExpandStructures()
+                                 .setIsOutermostType()
+                                 .setEncodingProperty(),
+                             /*Field=*/nullptr);
 }
 
-static char getObjCEncodingForPrimitiveKind(const ASTContext *C,
-                                            BuiltinType::Kind kind) {
+static char getObjCEncodingForPrimitiveType(const ASTContext *C,
+                                            const BuiltinType *BT) {
+    BuiltinType::Kind kind = BT->getKind();
     switch (kind) {
     case BuiltinType::Void:       return 'v';
     case BuiltinType::Bool:       return 'B';
@@ -6564,6 +6697,17 @@ static char getObjCEncodingForPrimitiveKind(const ASTContext *C,
       // FIXME: potentially need @encodes for these!
       return ' ';
 
+#define SVE_TYPE(Name, Id, SingletonId) \
+    case BuiltinType::Id:
+#include "clang/Basic/AArch64SVEACLETypes.def"
+    {
+      DiagnosticsEngine &Diags = C->getDiagnostics();
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error, "cannot yet @encode type %0");
+      Diags.Report(DiagID) << BT->getName(C->getPrintingPolicy());
+      return ' ';
+    }
+
     case BuiltinType::ObjCId:
     case BuiltinType::ObjCClass:
     case BuiltinType::ObjCSel:
@@ -6600,7 +6744,7 @@ static char ObjCEncodingForEnumType(const ASTContext *C, const EnumType *ET) {
 
   // The encoding of a fixed enum type matches its fixed underlying type.
   const auto *BT = Enum->getIntegerType()->castAs<BuiltinType>();
-  return getObjCEncodingForPrimitiveKind(C, BT->getKind());
+  return getObjCEncodingForPrimitiveType(C, BT);
 }
 
 static void EncodeBitField(const ASTContext *Ctx, std::string& S,
@@ -6640,23 +6784,16 @@ static void EncodeBitField(const ASTContext *Ctx, std::string& S,
       S += ObjCEncodingForEnumType(Ctx, ET);
     else {
       const auto *BT = T->castAs<BuiltinType>();
-      S += getObjCEncodingForPrimitiveKind(Ctx, BT->getKind());
+      S += getObjCEncodingForPrimitiveType(Ctx, BT);
     }
   }
   S += llvm::utostr(FD->getBitWidthValue(*Ctx));
 }
 
 // FIXME: Use SmallString for accumulating string.
-void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
-                                            bool ExpandPointedToStructures,
-                                            bool ExpandStructures,
+void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string &S,
+                                            const ObjCEncOptions Options,
                                             const FieldDecl *FD,
-                                            bool OutermostType,
-                                            bool EncodingProperty,
-                                            bool StructField,
-                                            bool EncodeBlockParameters,
-                                            bool EncodeClassNames,
-                                            bool EncodePointerToObjCTypedef,
                                             QualType *NotEncodedT) const {
   CanQualType CT = getCanonicalType(T);
   switch (CT->getTypeClass()) {
@@ -6665,7 +6802,7 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
     if (FD && FD->isBitField())
       return EncodeBitField(this, S, T, FD);
     if (const auto *BT = dyn_cast<BuiltinType>(CT))
-      S += getObjCEncodingForPrimitiveKind(this, BT->getKind());
+      S += getObjCEncodingForPrimitiveType(this, BT);
     else
       S += ObjCEncodingForEnumType(this, cast<EnumType>(CT));
     return;
@@ -6673,14 +6810,16 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
   case Type::Complex: {
     const auto *CT = T->castAs<ComplexType>();
     S += 'j';
-    getObjCEncodingForTypeImpl(CT->getElementType(), S, false, false, nullptr);
+    getObjCEncodingForTypeImpl(CT->getElementType(), S, ObjCEncOptions(),
+                               /*Field=*/nullptr);
     return;
   }
 
   case Type::Atomic: {
     const auto *AT = T->castAs<AtomicType>();
     S += 'A';
-    getObjCEncodingForTypeImpl(AT->getValueType(), S, false, false, nullptr);
+    getObjCEncodingForTypeImpl(AT->getValueType(), S, ObjCEncOptions(),
+                               /*Field=*/nullptr);
     return;
   }
 
@@ -6706,11 +6845,11 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
     // the pointer itself gets ignored, _unless_ we are looking at a typedef!
     // Also, do not emit the 'r' for anything but the outermost type!
     if (isa<TypedefType>(T.getTypePtr())) {
-      if (OutermostType && T.isConstQualified()) {
+      if (Options.IsOutermostType() && T.isConstQualified()) {
         isReadOnly = true;
         S += 'r';
       }
-    } else if (OutermostType) {
+    } else if (Options.IsOutermostType()) {
       QualType P = PointeeTy;
       while (P->getAs<PointerType>())
         P = P->getAs<PointerType>()->getPointeeType();
@@ -6750,9 +6889,11 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
     S += '^';
     getLegacyIntegralTypeEncoding(PointeeTy);
 
-    getObjCEncodingForTypeImpl(PointeeTy, S, false, ExpandPointedToStructures,
-                               nullptr, false, false, false, false, false, false,
-                               NotEncodedT);
+    ObjCEncOptions NewOptions;
+    if (Options.ExpandPointedToStructures())
+      NewOptions.setExpandStructures();
+    getObjCEncodingForTypeImpl(PointeeTy, S, NewOptions,
+                               /*Field=*/nullptr, NotEncodedT);
     return;
   }
 
@@ -6761,12 +6902,13 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
   case Type::VariableArray: {
     const auto *AT = cast<ArrayType>(CT);
 
-    if (isa<IncompleteArrayType>(AT) && !StructField) {
+    if (isa<IncompleteArrayType>(AT) && !Options.IsStructField()) {
       // Incomplete arrays are encoded as a pointer to the array element.
       S += '^';
 
-      getObjCEncodingForTypeImpl(AT->getElementType(), S,
-                                 false, ExpandStructures, FD);
+      getObjCEncodingForTypeImpl(
+          AT->getElementType(), S,
+          Options.keepingOnly(ObjCEncOptions().setExpandStructures()), FD);
     } else {
       S += '[';
 
@@ -6779,10 +6921,10 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
         S += '0';
       }
 
-      getObjCEncodingForTypeImpl(AT->getElementType(), S,
-                                 false, ExpandStructures, FD,
-                                 false, false, false, false, false, false,
-                                 NotEncodedT);
+      getObjCEncodingForTypeImpl(
+          AT->getElementType(), S,
+          Options.keepingOnly(ObjCEncOptions().setExpandStructures()), FD,
+          NotEncodedT);
       S += ']';
     }
     return;
@@ -6808,7 +6950,7 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
     } else {
       S += '?';
     }
-    if (ExpandStructures) {
+    if (Options.ExpandStructures()) {
       S += '=';
       if (!RDecl->isUnion()) {
         getObjCEncodingForStructureImpl(RDecl, S, FD, true, NotEncodedT);
@@ -6822,16 +6964,16 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
 
           // Special case bit-fields.
           if (Field->isBitField()) {
-            getObjCEncodingForTypeImpl(Field->getType(), S, false, true,
+            getObjCEncodingForTypeImpl(Field->getType(), S,
+                                       ObjCEncOptions().setExpandStructures(),
                                        Field);
           } else {
             QualType qt = Field->getType();
             getLegacyIntegralTypeEncoding(qt);
-            getObjCEncodingForTypeImpl(qt, S, false, true,
-                                       FD, /*OutermostType*/false,
-                                       /*EncodingProperty*/false,
-                                       /*StructField*/true,
-                                       false, false, false, NotEncodedT);
+            getObjCEncodingForTypeImpl(
+                qt, S,
+                ObjCEncOptions().setExpandStructures().setIsStructField(), FD,
+                NotEncodedT);
           }
         }
       }
@@ -6843,26 +6985,20 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
   case Type::BlockPointer: {
     const auto *BT = T->castAs<BlockPointerType>();
     S += "@?"; // Unlike a pointer-to-function, which is "^?".
-    if (EncodeBlockParameters) {
+    if (Options.EncodeBlockParameters()) {
       const auto *FT = BT->getPointeeType()->castAs<FunctionType>();
 
       S += '<';
       // Block return type
-      getObjCEncodingForTypeImpl(
-          FT->getReturnType(), S, ExpandPointedToStructures, ExpandStructures,
-          FD, false /* OutermostType */, EncodingProperty,
-          false /* StructField */, EncodeBlockParameters, EncodeClassNames, false,
-                                 NotEncodedT);
+      getObjCEncodingForTypeImpl(FT->getReturnType(), S,
+                                 Options.forComponentType(), FD, NotEncodedT);
       // Block self
       S += "@?";
       // Block parameters
       if (const auto *FPT = dyn_cast<FunctionProtoType>(FT)) {
         for (const auto &I : FPT->param_types())
-          getObjCEncodingForTypeImpl(
-              I, S, ExpandPointedToStructures, ExpandStructures, FD,
-              false /* OutermostType */, EncodingProperty,
-              false /* StructField */, EncodeBlockParameters, EncodeClassNames,
-                                     false, NotEncodedT);
+          getObjCEncodingForTypeImpl(I, S, Options.forComponentType(), FD,
+                                     NotEncodedT);
       }
       S += '>';
     }
@@ -6890,18 +7026,19 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
     ObjCInterfaceDecl *OI = T->castAs<ObjCObjectType>()->getInterface();
     S += '{';
     S += OI->getObjCRuntimeNameAsString();
-    if (ExpandStructures) {
+    if (Options.ExpandStructures()) {
       S += '=';
       SmallVector<const ObjCIvarDecl*, 32> Ivars;
       DeepCollectObjCIvars(OI, true, Ivars);
       for (unsigned i = 0, e = Ivars.size(); i != e; ++i) {
         const FieldDecl *Field = Ivars[i];
         if (Field->isBitField())
-          getObjCEncodingForTypeImpl(Field->getType(), S, false, true, Field);
+          getObjCEncodingForTypeImpl(Field->getType(), S,
+                                     ObjCEncOptions().setExpandStructures(),
+                                     Field);
         else
-          getObjCEncodingForTypeImpl(Field->getType(), S, false, true, FD,
-                                     false, false, false, false, false,
-                                     EncodePointerToObjCTypedef,
+          getObjCEncodingForTypeImpl(Field->getType(), S,
+                                     ObjCEncOptions().setExpandStructures(), FD,
                                      NotEncodedT);
       }
     }
@@ -6918,17 +7055,20 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
 
     if (OPT->isObjCClassType() || OPT->isObjCQualifiedClassType()) {
       // FIXME: Consider if we need to output qualifiers for 'Class<p>'.
-      // Since this is a binary compatibility issue, need to consult with runtime
-      // folks. Fortunately, this is a *very* obscure construct.
+      // Since this is a binary compatibility issue, need to consult with
+      // runtime folks. Fortunately, this is a *very* obscure construct.
       S += '#';
       return;
     }
 
     if (OPT->isObjCQualifiedIdType()) {
-      getObjCEncodingForTypeImpl(getObjCIdType(), S,
-                                 ExpandPointedToStructures,
-                                 ExpandStructures, FD);
-      if (FD || EncodingProperty || EncodeClassNames) {
+      getObjCEncodingForTypeImpl(
+          getObjCIdType(), S,
+          Options.keepingOnly(ObjCEncOptions()
+                                  .setExpandPointedToStructures()
+                                  .setExpandStructures()),
+          FD);
+      if (FD || Options.EncodingProperty() || Options.EncodeClassNames()) {
         // Note that we do extended encoding of protocol qualifer list
         // Only when doing ivar or property encoding.
         S += '"';
@@ -6942,39 +7082,9 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
       return;
     }
 
-    QualType PointeeTy = OPT->getPointeeType();
-    if (!EncodingProperty &&
-        isa<TypedefType>(PointeeTy.getTypePtr()) &&
-        !EncodePointerToObjCTypedef) {
-      // Another historical/compatibility reason.
-      // We encode the underlying type which comes out as
-      // {...};
-      S += '^';
-      if (FD && OPT->getInterfaceDecl()) {
-        // Prevent recursive encoding of fields in some rare cases.
-        ObjCInterfaceDecl *OI = OPT->getInterfaceDecl();
-        SmallVector<const ObjCIvarDecl*, 32> Ivars;
-        DeepCollectObjCIvars(OI, true, Ivars);
-        for (unsigned i = 0, e = Ivars.size(); i != e; ++i) {
-          if (Ivars[i] == FD) {
-            S += '{';
-            S += OI->getObjCRuntimeNameAsString();
-            S += '}';
-            return;
-          }
-        }
-      }
-      getObjCEncodingForTypeImpl(PointeeTy, S,
-                                 false, ExpandPointedToStructures,
-                                 nullptr,
-                                 false, false, false, false, false,
-                                 /*EncodePointerToObjCTypedef*/true);
-      return;
-    }
-
     S += '@';
     if (OPT->getInterfaceDecl() &&
-        (FD || EncodingProperty || EncodeClassNames)) {
+        (FD || Options.EncodingProperty() || Options.EncodeClassNames())) {
       S += '"';
       S += OPT->getInterfaceDecl()->getObjCRuntimeNameAsString();
       for (const auto *I : OPT->quals()) {
@@ -6988,7 +7098,7 @@ void ASTContext::getObjCEncodingForTypeImpl(QualType T, std::string& S,
   }
 
   // gcc just blithely ignores member pointers.
-  // FIXME: we shoul do better than that.  'M' is available.
+  // FIXME: we should do better than that.  'M' is available.
   case Type::MemberPointer:
   // This matches gcc's encoding, even though technically it is insufficient.
   //FIXME. We should do a better job than gcc.
@@ -7150,11 +7260,9 @@ void ASTContext::getObjCEncodingForStructureImpl(RecordDecl *RDecl,
       } else {
         QualType qt = field->getType();
         getLegacyIntegralTypeEncoding(qt);
-        getObjCEncodingForTypeImpl(qt, S, false, true, FD,
-                                   /*OutermostType*/false,
-                                   /*EncodingProperty*/false,
-                                   /*StructField*/true,
-                                   false, false, false, NotEncodedT);
+        getObjCEncodingForTypeImpl(
+            qt, S, ObjCEncOptions().setExpandStructures().setIsStructField(),
+            FD, NotEncodedT);
 #ifndef NDEBUG
         CurOffs += getTypeSize(field->getType());
 #endif
@@ -7614,6 +7722,13 @@ ASTContext::getOverloadedTemplateName(UnresolvedSetIterator Begin,
   return TemplateName(OT);
 }
 
+/// Retrieve a template name representing an unqualified-id that has been
+/// assumed to name a template for ADL purposes.
+TemplateName ASTContext::getAssumedTemplateName(DeclarationName Name) const {
+  auto *OT = new (*this) AssumedTemplateStorage(Name);
+  return TemplateName(OT);
+}
+
 /// Retrieve the template name that represents a qualified
 /// template name such as \c std::vector.
 TemplateName
@@ -7840,6 +7955,28 @@ bool ASTContext::areCompatibleVectorTypes(QualType FirstVec,
     return true;
 
   return false;
+}
+
+bool ASTContext::hasDirectOwnershipQualifier(QualType Ty) const {
+  while (true) {
+    // __strong id
+    if (const AttributedType *Attr = dyn_cast<AttributedType>(Ty)) {
+      if (Attr->getAttrKind() == attr::ObjCOwnership)
+        return true;
+
+      Ty = Attr->getModifiedType();
+
+    // X *__strong (...)
+    } else if (const ParenType *Paren = dyn_cast<ParenType>(Ty)) {
+      Ty = Paren->getInnerType();
+
+    // We do not want to look through typedefs, typeof(expr),
+    // typeof(type), or any other way that the type is somehow
+    // abstracted.
+    } else {
+      return false;
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -8084,9 +8221,9 @@ bool ASTContext::canAssignObjCInterfacesInBlockPointer(
   }
 
   if (LHSOPT->isObjCQualifiedIdType() || RHSOPT->isObjCQualifiedIdType())
-    return finish(ObjCQualifiedIdTypesAreCompatible(QualType(LHSOPT,0),
-                                                    QualType(RHSOPT,0),
-                                                    false));
+    return finish(ObjCQualifiedIdTypesAreCompatible(
+        QualType(BlockReturnType ? LHSOPT : RHSOPT, 0),
+        QualType(BlockReturnType ? RHSOPT : LHSOPT, 0), false));
 
   const ObjCInterfaceType* LHS = LHSOPT->getInterfaceType();
   const ObjCInterfaceType* RHS = RHSOPT->getInterfaceType();
@@ -9254,7 +9391,7 @@ static QualType DecodeTypeFromStr(const char *&Str, const ASTContext &Context,
   // Read the prefixed modifiers first.
   bool Done = false;
   #ifndef NDEBUG
-  bool IsSpecialLong = false;
+  bool IsSpecial = false;
   #endif
   while (!Done) {
     switch (*Str++) {
@@ -9273,26 +9410,26 @@ static QualType DecodeTypeFromStr(const char *&Str, const ASTContext &Context,
       Unsigned = true;
       break;
     case 'L':
-      assert(!IsSpecialLong && "Can't use 'L' with 'W' or 'N' modifiers");
+      assert(!IsSpecial && "Can't use 'L' with 'W', 'N', 'Z' or 'O' modifiers");
       assert(HowLong <= 2 && "Can't have LLLL modifier");
       ++HowLong;
       break;
     case 'N':
       // 'N' behaves like 'L' for all non LP64 targets and 'int' otherwise.
-      assert(!IsSpecialLong && "Can't use two 'N' or 'W' modifiers!");
+      assert(!IsSpecial && "Can't use two 'N', 'W', 'Z' or 'O' modifiers!");
       assert(HowLong == 0 && "Can't use both 'L' and 'N' modifiers!");
       #ifndef NDEBUG
-      IsSpecialLong = true;
+      IsSpecial = true;
       #endif
       if (Context.getTargetInfo().getLongWidth() == 32)
         ++HowLong;
       break;
     case 'W':
       // This modifier represents int64 type.
-      assert(!IsSpecialLong && "Can't use two 'N' or 'W' modifiers!");
+      assert(!IsSpecial && "Can't use two 'N', 'W', 'Z' or 'O' modifiers!");
       assert(HowLong == 0 && "Can't use both 'L' and 'W' modifiers!");
       #ifndef NDEBUG
-      IsSpecialLong = true;
+      IsSpecial = true;
       #endif
       switch (Context.getTargetInfo().getInt64Type()) {
       default:
@@ -9304,6 +9441,38 @@ static QualType DecodeTypeFromStr(const char *&Str, const ASTContext &Context,
         HowLong = 2;
         break;
       }
+      break;
+    case 'Z':
+      // This modifier represents int32 type.
+      assert(!IsSpecial && "Can't use two 'N', 'W', 'Z' or 'O' modifiers!");
+      assert(HowLong == 0 && "Can't use both 'L' and 'Z' modifiers!");
+      #ifndef NDEBUG
+      IsSpecial = true;
+      #endif
+      switch (Context.getTargetInfo().getIntTypeByWidth(32, true)) {
+      default:
+        llvm_unreachable("Unexpected integer type");
+      case TargetInfo::SignedInt:
+        HowLong = 0;
+        break;
+      case TargetInfo::SignedLong:
+        HowLong = 1;
+        break;
+      case TargetInfo::SignedLongLong:
+        HowLong = 2;
+        break;
+      }
+      break;
+    case 'O':
+      assert(!IsSpecial && "Can't use two 'N', 'W', 'Z' or 'O' modifiers!");
+      assert(HowLong == 0 && "Can't use both 'L' and 'O' modifiers!");
+      #ifndef NDEBUG
+      IsSpecial = true;
+      #endif
+      if (Context.getLangOpts().OpenCL)
+        HowLong = 1;
+      else
+        HowLong = 2;
       break;
     }
   }
@@ -9565,10 +9734,12 @@ QualType ASTContext::GetBuiltinType(unsigned Id,
   assert((TypeStr[0] != '.' || TypeStr[1] == 0) &&
          "'.' should only occur at end of builtin type list!");
 
-  FunctionType::ExtInfo EI(CC_C);
+  bool Variadic = (TypeStr[0] == '.');
+
+  FunctionType::ExtInfo EI(getDefaultCallingConvention(
+      Variadic, /*IsCXXMethod=*/false, /*IsBuiltin=*/true));
   if (BuiltinInfo.isNoReturn(Id)) EI = EI.withNoReturn(true);
 
-  bool Variadic = (TypeStr[0] == '.');
 
   // We really shouldn't be making a no-proto type here.
   if (ArgTypes.empty() && Variadic && !getLangOpts().CPlusPlus)
@@ -9756,10 +9927,25 @@ static GVALinkage basicGVALinkageForVariable(const ASTContext &Context,
     return StrongLinkage;
 
   case TSK_ExplicitSpecialization:
-    return Context.getTargetInfo().getCXXABI().isMicrosoft() &&
-                   VD->isStaticDataMember()
-               ? GVA_StrongODR
-               : StrongLinkage;
+    if (Context.getTargetInfo().getCXXABI().isMicrosoft()) {
+      // If this is a fully specialized constexpr variable template, pretend it
+      // was marked inline. MSVC 14.21.27702 headers define _Is_integral in a
+      // header this way, and we don't want to emit non-discardable definitions
+      // of these variables in every TU that includes <type_traits>. This
+      // behavior is non-conforming, since another TU could use an extern
+      // template declaration for this variable, but for constexpr variables,
+      // it's unlikely for a user to want to do that. This behavior can be
+      // removed if the headers change to explicitly mark such variable template
+      // specializations inline.
+      if (isa<VarTemplateSpecializationDecl>(VD) && VD->isConstexpr())
+        return GVA_DiscardableODR;
+
+      // Use ODR linkage for static data members of fully specialized templates
+      // to prevent duplicate definition errors with MSVC.
+      if (VD->isStaticDataMember())
+        return GVA_StrongODR;
+    }
+    return StrongLinkage;
 
   case TSK_ExplicitInstantiationDefinition:
     return GVA_StrongODR;
@@ -9796,13 +9982,13 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
       return false;
   } else if (isa<PragmaCommentDecl>(D))
     return true;
-  else if (isa<OMPThreadPrivateDecl>(D))
-    return true;
   else if (isa<PragmaDetectMismatchDecl>(D))
     return true;
   else if (isa<OMPThreadPrivateDecl>(D))
     return !D->getDeclContext()->isDependentContext();
-  else if (isa<OMPDeclareReductionDecl>(D))
+  else if (isa<OMPAllocateDecl>(D))
+    return !D->getDeclContext()->isDependentContext();
+  else if (isa<OMPDeclareReductionDecl>(D) || isa<OMPDeclareMapperDecl>(D))
     return !D->getDeclContext()->isDependentContext();
   else if (isa<ImportDecl>(D))
     return true;
@@ -9943,36 +10129,41 @@ void ASTContext::forEachMultiversionedFunctionVersion(
 }
 
 CallingConv ASTContext::getDefaultCallingConvention(bool IsVariadic,
-                                                    bool IsCXXMethod) const {
+                                                    bool IsCXXMethod,
+                                                    bool IsBuiltin) const {
   // Pass through to the C++ ABI object
   if (IsCXXMethod)
     return ABI->getDefaultMethodCallConv(IsVariadic);
 
-  switch (LangOpts.getDefaultCallingConv()) {
-  case LangOptions::DCC_None:
-    break;
-  case LangOptions::DCC_CDecl:
-    return CC_C;
-  case LangOptions::DCC_FastCall:
-    if (getTargetInfo().hasFeature("sse2") && !IsVariadic)
-      return CC_X86FastCall;
-    break;
-  case LangOptions::DCC_StdCall:
-    if (!IsVariadic)
-      return CC_X86StdCall;
-    break;
-  case LangOptions::DCC_VectorCall:
-    // __vectorcall cannot be applied to variadic functions.
-    if (!IsVariadic)
-      return CC_X86VectorCall;
-    break;
-  case LangOptions::DCC_RegCall:
-    // __regcall cannot be applied to variadic functions.
-    if (!IsVariadic)
-      return CC_X86RegCall;
-    break;
+  // Builtins ignore user-specified default calling convention and remain the
+  // Target's default calling convention.
+  if (!IsBuiltin) {
+    switch (LangOpts.getDefaultCallingConv()) {
+    case LangOptions::DCC_None:
+      break;
+    case LangOptions::DCC_CDecl:
+      return CC_C;
+    case LangOptions::DCC_FastCall:
+      if (getTargetInfo().hasFeature("sse2") && !IsVariadic)
+        return CC_X86FastCall;
+      break;
+    case LangOptions::DCC_StdCall:
+      if (!IsVariadic)
+        return CC_X86StdCall;
+      break;
+    case LangOptions::DCC_VectorCall:
+      // __vectorcall cannot be applied to variadic functions.
+      if (!IsVariadic)
+        return CC_X86VectorCall;
+      break;
+    case LangOptions::DCC_RegCall:
+      // __regcall cannot be applied to variadic functions.
+      if (!IsVariadic)
+        return CC_X86RegCall;
+      break;
+    }
   }
-  return Target->getDefaultCallingConv(TargetInfo::CCMT_Unknown);
+  return Target->getDefaultCallingConv();
 }
 
 bool ASTContext::isNearlyEmpty(const CXXRecordDecl *RD) const {
@@ -10024,8 +10215,7 @@ size_t ASTContext::getSideTableAllocatedMemory() const {
          llvm::capacity_in_bytes(InstantiatedFromUnnamedFieldDecl) +
          llvm::capacity_in_bytes(OverriddenMethods) +
          llvm::capacity_in_bytes(Types) +
-         llvm::capacity_in_bytes(VariableArrayTypes) +
-         llvm::capacity_in_bytes(ClassScopeSpecializationPattern);
+         llvm::capacity_in_bytes(VariableArrayTypes);
 }
 
 /// getIntTypeForBitwidth -
@@ -10152,6 +10342,31 @@ ASTContext::getMaterializedTemporaryValue(const MaterializeTemporaryExpr *E,
   }
 
   return MaterializedTemporaryValues.lookup(E);
+}
+
+QualType ASTContext::getStringLiteralArrayType(QualType EltTy,
+                                               unsigned Length) const {
+  // A C++ string literal has a const-qualified element type (C++ 2.13.4p1).
+  if (getLangOpts().CPlusPlus || getLangOpts().ConstStrings)
+    EltTy = EltTy.withConst();
+
+  EltTy = adjustStringLiteralBaseType(EltTy);
+
+  // Get an array type for the string, according to C99 6.4.5. This includes
+  // the null terminator character.
+  return getConstantArrayType(EltTy, llvm::APInt(32, Length + 1),
+                              ArrayType::Normal, /*IndexTypeQuals*/ 0);
+}
+
+StringLiteral *
+ASTContext::getPredefinedStringLiteralFromCache(StringRef Key) const {
+  StringLiteral *&Result = StringLiteralCache[Key];
+  if (!Result)
+    Result = StringLiteral::Create(
+        *this, Key, StringLiteral::Ascii,
+        /*Pascal*/ false, getStringLiteralArrayType(CharTy, Key.size()),
+        SourceLocation());
+  return Result;
 }
 
 bool ASTContext::AtomicUsesUnsupportedLibcall(const AtomicExpr *E) const {
@@ -10302,7 +10517,7 @@ ASTContext::getParents(const ast_type_traits::DynTypedNode &Node) {
   if (!Parents)
     // We build the parent map for the traversal scope (usually whole TU), as
     // hasAncestor can escape any subtree.
-    Parents = llvm::make_unique<ParentMap>(*this);
+    Parents = std::make_unique<ParentMap>(*this);
   return Parents->getParents(Node);
 }
 
