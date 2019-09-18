@@ -1035,7 +1035,7 @@ FormatStyle getGNUStyle() {
 }
 
 FormatStyle getMicrosoftStyle(FormatStyle::LanguageKind Language) {
-  FormatStyle Style = getLLVMStyle();
+  FormatStyle Style = getLLVMStyle(Language);
   Style.ColumnLimit = 120;
   Style.TabWidth = 4;
   Style.IndentWidth = 4;
@@ -1056,6 +1056,8 @@ FormatStyle getMicrosoftStyle(FormatStyle::LanguageKind Language) {
   Style.AllowShortCaseLabelsOnASingleLine = false;
   Style.AllowShortIfStatementsOnASingleLine = FormatStyle::SIS_Never;
   Style.AllowShortLoopsOnASingleLine = false;
+  Style.AlwaysBreakAfterDefinitionReturnType = FormatStyle::DRTBS_None;
+  Style.AlwaysBreakAfterReturnType = FormatStyle::RTBS_None;
   return Style;
 }
 
@@ -2334,7 +2336,7 @@ reformat(const FormatStyle &Style, StringRef Code,
 
   auto Env =
       std::make_unique<Environment>(Code, FileName, Ranges, FirstStartColumn,
-                                     NextStartColumn, LastStartColumn);
+                                    NextStartColumn, LastStartColumn);
   llvm::Optional<std::string> CurrentCode = None;
   tooling::Replacements Fixes;
   unsigned Penalty = 0;
