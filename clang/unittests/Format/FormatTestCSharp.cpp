@@ -58,6 +58,7 @@ TEST_F(FormatTestCSharp, CSharpClass) {
                "    while (true) f();\n"
                "    for (;;) f();\n"
                "    if (true) f();\n"
+               "    foreach (x in y) f();\n"
                "  }\n"
                "}");
 }
@@ -119,13 +120,25 @@ TEST_F(FormatTestCSharp, CSharpFatArrows) {
 }
 
 TEST_F(FormatTestCSharp, CSharpNullConditional) {
+  FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
+  Style.SpaceBeforeParens = FormatStyle::SBPO_Always;
+
   verifyFormat(
       "public Person(string firstName, string lastName, int? age=null)");
 
-  verifyFormat("switch(args?.Length)");
+  verifyFormat("foo () {\n"
+               "  switch (args?.Length) {}\n"
+               "}",
+               Style);
+
+  verifyFormat("switch (args?.Length) {}", Style);
 
   verifyFormat("public static void Main(string[] args) { string dirPath "
                "= args?[0]; }");
+
+  Style.SpaceBeforeParens = FormatStyle::SBPO_Never;
+
+  verifyFormat("switch(args?.Length) {}", Style);
 }
 
 TEST_F(FormatTestCSharp, Attributes) {
@@ -168,15 +181,21 @@ TEST_F(FormatTestCSharp, Attributes) {
 TEST_F(FormatTestCSharp, CSharpUsing) {
   FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
   Style.SpaceBeforeParens = FormatStyle::SBPO_Always;
-  verifyFormat("public void foo() {\n"
+  verifyFormat("public void foo () {\n"
                "  using (StreamWriter sw = new StreamWriter (filenameA)) {}\n"
                "}",
+               Style);
+
+  verifyFormat("using (StreamWriter sw = new StreamWriter (filenameB)) {}",
                Style);
 
   Style.SpaceBeforeParens = FormatStyle::SBPO_Never;
   verifyFormat("public void foo() {\n"
                "  using(StreamWriter sw = new StreamWriter(filenameB)) {}\n"
                "}",
+               Style);
+
+  verifyFormat("using(StreamWriter sw = new StreamWriter(filenameB)) {}",
                Style);
 }
 
@@ -193,6 +212,41 @@ TEST_F(FormatTestCSharp, CSharpNullCoalescing) {
   verifyFormat("var test = ABC ?? DEF");
   verifyFormat("string myname = name ?? \"ABC\";");
   verifyFormat("return _name ?? \"DEF\";");
+}
+
+TEST_F(FormatTestCSharp, CSharpSpaceBefore) {
+  FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
+  Style.SpaceBeforeParens = FormatStyle::SBPO_Always;
+
+  verifyFormat("List<string> list;", Style);
+  verifyFormat("Dictionary<string, string> dict;", Style);
+
+  verifyFormat("for (int i = 0; i < size (); i++) {\n"
+               "}",
+               Style);
+  verifyFormat("foreach (var x in y) {\n"
+               "}",
+               Style);
+  verifyFormat("switch (x) {}", Style);
+  verifyFormat("do {\n"
+               "} while (x);",
+               Style);
+
+  Style.SpaceBeforeParens = FormatStyle::SBPO_Never;
+
+  verifyFormat("List<string> list;", Style);
+  verifyFormat("Dictionary<string, string> dict;", Style);
+
+  verifyFormat("for(int i = 0; i < size(); i++) {\n"
+               "}",
+               Style);
+  verifyFormat("foreach(var x in y) {\n"
+               "}",
+               Style);
+  verifyFormat("switch(x) {}", Style);
+  verifyFormat("do {\n"
+               "} while(x);",
+               Style);
 }
 
 } // namespace format

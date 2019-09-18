@@ -41,6 +41,8 @@ The following is a list of revisions included in clang-format-experimental, for 
 
 * [D54881](https://reviews.llvm.org/D54881) - [clang-format] Prevent Clang-Format from editing leading whitespace on lines outside of the format range
 
+* [D67660](https://reviews.llvm.org/D67660) - [clang-format] [clang-format] [PR43338] C# clang format has space issues betweern C# only keywords
+
 # Revisions Removed (as now in trunk)
 
 * [D28462](https://reviews.llvm.org/D28462) - [clang-format] Add new style option AlignConsecutiveMacros
