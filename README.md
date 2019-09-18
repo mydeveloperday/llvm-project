@@ -42,6 +42,7 @@ The following is a list of revisions included in clang-format-experimental, for 
 * [D54881](https://reviews.llvm.org/D54881) - [clang-format] Prevent Clang-Format from editing leading whitespace on lines outside of the format range
 
 * [D67660](https://reviews.llvm.org/D67660) - [clang-format] [clang-format] [PR43338] C# clang format has space issues betweern C# only keywords
+* [D67629](https://reviews.llvm.org/D67629) - [clang-format] [clang-format] [PR43333] Fix C# breaking before function name when using Attributes
 
 # Revisions Removed (as now in trunk)
 
