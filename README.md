@@ -40,12 +40,15 @@ issue here citing the revision number D1234
 The following is a list of revisions included in clang-format-experimental, for documentation you currently need to visit the revision in Phabricator
 
 * [D54881](https://reviews.llvm.org/D54881) - [clang-format] Prevent Clang-Format from editing leading whitespace on lines outside of the format range
+* [D68554](https://reviews.llvm.org/D68554) - [clang-format] Proposal for clang-format to give compiler style warnings
+* [D68568](https://reviews.llvm.org/D68568) - [clang-format] Make '.clang-format' variants finding a loop
+* [D68569](https://reviews.llvm.org/D68569) - [clang-format] Also look for .{ext}.clang-format file
 
-* [D67660](https://reviews.llvm.org/D67660) - [clang-format] [clang-format] [PR43338] C# clang format has space issues betweern C# only keywords
-* [D67629](https://reviews.llvm.org/D67629) - [clang-format] [clang-format] [PR43333] Fix C# breaking before function name when using Attributes
 
 # Revisions Removed (as now in trunk)
 
+* [D67660](https://reviews.llvm.org/D67660) - [clang-format] [PR43338] C# clang format has space issues betweern C# only keywords
+* [D67629](https://reviews.llvm.org/D67629) - [clang-format] [PR43333] Fix C# breaking before function name when using Attributes
 * [D28462](https://reviews.llvm.org/D28462) - [clang-format] Add new style option AlignConsecutiveMacros
 * [D52150](https://reviews.llvm.org/D52159) - [clang-format] BeforeHash added to IndentPPDirectives
 * [D59292](https://reviews.llvm.org/D59292) - [clang-format] messes up indentation when using JavaScript private fields and methods

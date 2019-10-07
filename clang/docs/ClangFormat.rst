@@ -82,8 +82,10 @@ to format C/C++/Java/JavaScript/Objective-C/Protobuf/C# code.
 
 When the desired code formatting style is different from the available options,
 the style can be customized using the ``-style="{key: value, ...}"`` option or
-by putting your style configuration in the ``.clang-format`` or ``_clang-format``
-file in your project's directory and using ``clang-format -style=file``.
+by putting your style configuration a file named ``.{ext}.clang-format`` (``{ext}``
+is the file name extension, e.g. ``.cpp.clang-format`` is the formatted file
+is named ``something.cpp``), ``.clang-format`` or ``_clang-format`` in your
+project's directory and using ``clang-format -style=file``.
 
 An easy way to create the ``.clang-format`` file is:
 

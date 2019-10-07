@@ -18,6 +18,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Version.h"
 #include "clang/Format/Format.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -107,6 +108,54 @@ static cl::opt<bool> SortIncludes(
 static cl::opt<bool>
     Verbose("verbose", cl::desc("If set, shows the list of processed files"),
             cl::cat(ClangFormatCategory));
+
+// Use --dry-run to match other LLVM tools when you mean do it but don't
+// actually do it
+static cl::opt<bool>
+    DryRun("dry-run",
+           cl::desc("If set, do not actually make the formatting changes"),
+           cl::cat(ClangFormatCategory));
+
+// Use -n as a common command as an alias for --dry-run. (git and make use -n)
+static cl::alias DryRunShort("n", cl::desc("Alias for --dry-run"),
+                             cl::cat(ClangFormatCategory), cl::aliasopt(DryRun),
+                             cl::NotHidden);
+
+// Emulate being able to turn on/off the warning.
+static cl::opt<bool>
+    WarnFormat("Wclang-format-violations",
+               cl::desc("Warnings about individual formatting changes needed. "
+                        "Used only with --dry-run or -n"),
+               cl::init(true), cl::cat(ClangFormatCategory), cl::Hidden);
+
+static cl::opt<bool>
+    NoWarnFormat("Wno-clang-format-violations",
+                 cl::desc("Do not warn about individual formatting changes "
+                          "needed. Used only with --dry-run or -n"),
+                 cl::init(false), cl::cat(ClangFormatCategory), cl::Hidden);
+
+static cl::opt<unsigned> ErrorLimit(
+    "ferror-limit",
+    cl::desc("Set the maximum number of clang-format errors to emit before "
+             "stopping (0 = no limit). Used only with --dry-run or -n"),
+    cl::init(0), cl::cat(ClangFormatCategory));
+
+static cl::opt<bool>
+    WarningsAsErrors("Werror",
+                     cl::desc("If set, changes formatting warnings to errors"),
+                     cl::cat(ClangFormatCategory));
+
+static cl::opt<bool>
+    ShowColors("fcolor-diagnostics",
+               cl::desc("If set, and on a color-capable terminal controls "
+                        "whether or not to print diagnostics in color"),
+               cl::init(true), cl::cat(ClangFormatCategory), cl::Hidden);
+
+static cl::opt<bool>
+    NoShowColors("fno-color-diagnostics",
+                 cl::desc("If set, and on a color-capable terminal controls "
+                          "whether or not to print diagnostics in color"),
+                 cl::init(false), cl::cat(ClangFormatCategory), cl::Hidden);
 
 static cl::list<std::string> FileNames(cl::Positional, cl::desc("[<file> ...]"),
                                        cl::cat(ClangFormatCategory));
@@ -318,20 +367,62 @@ static bool format(StringRef FileName) {
   Replacements FormatChanges =
       reformat(*FormatStyle, *ChangedCode, Ranges, AssumedFileName, &Status);
   Replaces = Replaces.merge(FormatChanges);
-  if (OutputXML) {
-    outs() << "<?xml version='1.0'?>\n<replacements "
-              "xml:space='preserve' incomplete_format='"
-           << (Status.FormatComplete ? "false" : "true") << "'";
-    if (!Status.FormatComplete)
-      outs() << " line='" << Status.Line << "'";
-    outs() << ">\n";
-    if (Cursor.getNumOccurrences() != 0)
-      outs() << "<cursor>"
-             << FormatChanges.getShiftedCodePosition(CursorPosition)
-             << "</cursor>\n";
+  if (OutputXML || DryRun) {
+    if (DryRun) {
+      if (!Replaces.empty()) {
+        IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts =
+            new DiagnosticOptions();
+        DiagOpts->ShowColors = (ShowColors && !NoShowColors);
 
-    outputReplacementsXML(Replaces);
-    outs() << "</replacements>\n";
+        TextDiagnosticPrinter *DiagsBuffer =
+            new TextDiagnosticPrinter(llvm::errs(), &*DiagOpts, false);
+
+        IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
+        IntrusiveRefCntPtr<DiagnosticsEngine> Diags(
+            new DiagnosticsEngine(DiagID, &*DiagOpts, DiagsBuffer));
+
+        IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFileSystem(
+            new llvm::vfs::InMemoryFileSystem);
+        FileManager Files(FileSystemOptions(), InMemoryFileSystem);
+        SourceManager Sources(*Diags, Files);
+        FileID FileID = createInMemoryFile(AssumedFileName, Code.get(), Sources,
+                                           Files, InMemoryFileSystem.get());
+
+        const unsigned ID = Diags->getCustomDiagID(
+            WarningsAsErrors ? clang::DiagnosticsEngine::Error
+                             : clang::DiagnosticsEngine::Warning,
+            "code should be clang-formatted [-Wclang-format-violations]");
+
+        unsigned Errors = 0;
+        DiagsBuffer->BeginSourceFile(LangOptions(), nullptr);
+        if (WarnFormat && !NoWarnFormat) {
+          for (const auto &R : Replaces) {
+            Diags->Report(Sources.getLocForStartOfFile(FileID).getLocWithOffset(
+                              R.getOffset()),
+                          ID);
+            Errors++;
+            if (ErrorLimit && Errors >= ErrorLimit)
+              break;
+          }
+        }
+        DiagsBuffer->EndSourceFile();
+      }
+      return true;
+    } else {
+      outs() << "<?xml version='1.0'?>\n<replacements "
+                "xml:space='preserve' incomplete_format='"
+             << (Status.FormatComplete ? "false" : "true") << "'";
+      if (!Status.FormatComplete)
+        outs() << " line='" << Status.Line << "'";
+      outs() << ">\n";
+      if (Cursor.getNumOccurrences() != 0)
+        outs() << "<cursor>"
+               << FormatChanges.getShiftedCodePosition(CursorPosition)
+               << "</cursor>\n";
+
+      outputReplacementsXML(Replaces);
+      outs() << "</replacements>\n";
+    }
   } else {
     IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFileSystem(
         new llvm::vfs::InMemoryFileSystem);
