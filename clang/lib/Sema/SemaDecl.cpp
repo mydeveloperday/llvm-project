@@ -2172,7 +2172,7 @@ void Sema::MergeTypedefNameDecl(Scope *S, TypedefNameDecl *New,
         if (!T->isPointerType())
           break;
         if (!T->isVoidPointerType()) {
-          QualType PT = T->getAs<PointerType>()->getPointeeType();
+          QualType PT = T->castAs<PointerType>()->getPointeeType();
           if (!PT->isStructureType())
             break;
         }
@@ -2766,7 +2766,7 @@ void Sema::mergeDeclAttributes(NamedDecl *New, Decl *Old,
 
   if (AsmLabelAttr *NewA = New->getAttr<AsmLabelAttr>()) {
     if (AsmLabelAttr *OldA = Old->getAttr<AsmLabelAttr>()) {
-      if (OldA->getLabel() != NewA->getLabel()) {
+      if (!OldA->isEquivalent(NewA)) {
         // This redeclaration changes __asm__ label.
         Diag(New->getLocation(), diag::err_different_asm_label);
         Diag(OldA->getLocation(), diag::note_previous_declaration);
@@ -5758,8 +5758,8 @@ static QualType TryToFixInvalidVariablyModifiedType(QualType T,
     return QualType();
   }
 
-  return Context.getConstantArrayType(VLATy->getElementType(),
-                                      Res, ArrayType::Normal, 0);
+  return Context.getConstantArrayType(
+      VLATy->getElementType(), Res, VLATy->getSizeExpr(), ArrayType::Normal, 0);
 }
 
 static void
@@ -6983,8 +6983,8 @@ NamedDecl *Sema::ActOnVariableDeclarator(
       }
     }
 
-    NewVD->addAttr(::new (Context)
-                       AsmLabelAttr(Context, SE->getStrTokenLoc(0), Label));
+    NewVD->addAttr(::new (Context) AsmLabelAttr(
+        Context, SE->getStrTokenLoc(0), Label, /*IsLiteralLabel=*/true));
   } else if (!ExtnameUndeclaredIdentifiers.empty()) {
     llvm::DenseMap<IdentifierInfo*,AsmLabelAttr*>::iterator I =
       ExtnameUndeclaredIdentifiers.find(NewVD->getIdentifier());
@@ -7767,7 +7767,7 @@ struct FindOverriddenMethod {
   /// CXXRecordDecl::lookupInBases().
   bool operator()(const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
     RecordDecl *BaseRecord =
-        Specifier->getType()->getAs<RecordType>()->getDecl();
+        Specifier->getType()->castAs<RecordType>()->getDecl();
 
     DeclarationName Name = Method->getDeclName();
 
@@ -8152,7 +8152,7 @@ static FunctionDecl *CreateNewFunctionDecl(Sema &SemaRef, Declarator &D,
   // the class has been completely parsed.
   if (!DC->isRecord() &&
       SemaRef.RequireNonAbstractType(
-          D.getIdentifierLoc(), R->getAs<FunctionType>()->getReturnType(),
+          D.getIdentifierLoc(), R->castAs<FunctionType>()->getReturnType(),
           diag::err_abstract_type_in_decl, SemaRef.AbstractReturnType))
     D.setInvalidType();
 
@@ -8172,10 +8172,10 @@ static FunctionDecl *CreateNewFunctionDecl(Sema &SemaRef, Declarator &D,
     if (DC->isRecord()) {
       R = SemaRef.CheckDestructorDeclarator(D, R, SC);
       CXXRecordDecl *Record = cast<CXXRecordDecl>(DC);
-      CXXDestructorDecl *NewDD =
-          CXXDestructorDecl::Create(SemaRef.Context, Record, D.getBeginLoc(),
-                                    NameInfo, R, TInfo, isInline,
-                                    /*isImplicitlyDeclared=*/false);
+      CXXDestructorDecl *NewDD = CXXDestructorDecl::Create(
+          SemaRef.Context, Record, D.getBeginLoc(), NameInfo, R, TInfo,
+          isInline,
+          /*isImplicitlyDeclared=*/false, ConstexprKind);
 
       // If the destructor needs an implicit exception specification, set it
       // now. FIXME: It'd be nice to be able to create the right type to start
@@ -8206,6 +8206,9 @@ static FunctionDecl *CreateNewFunctionDecl(Sema &SemaRef, Declarator &D,
     }
 
     SemaRef.CheckConversionDeclarator(D, R, SC);
+    if (D.isInvalidType())
+      return nullptr;
+
     IsVirtualOkay = true;
     return CXXConversionDecl::Create(
         SemaRef.Context, cast<CXXRecordDecl>(DC), D.getBeginLoc(), NameInfo, R,
@@ -8784,7 +8787,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
       // C++11 [dcl.constexpr]p3: functions declared constexpr are required to
       // be either constructors or to return a literal type. Therefore,
       // destructors cannot be declared constexpr.
-      if (isa<CXXDestructorDecl>(NewFD)) {
+      if (isa<CXXDestructorDecl>(NewFD) && !getLangOpts().CPlusPlus2a) {
         Diag(D.getDeclSpec().getConstexprSpecLoc(), diag::err_constexpr_dtor)
             << ConstexprKind;
       }
@@ -8882,8 +8885,9 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   if (Expr *E = (Expr*) D.getAsmLabel()) {
     // The parser guarantees this is a string.
     StringLiteral *SE = cast<StringLiteral>(E);
-    NewFD->addAttr(::new (Context) AsmLabelAttr(Context, SE->getStrTokenLoc(0),
-                                                SE->getString()));
+    NewFD->addAttr(::new (Context)
+                       AsmLabelAttr(Context, SE->getStrTokenLoc(0),
+                                    SE->getString(), /*IsLiteralLabel=*/true));
   } else if (!ExtnameUndeclaredIdentifiers.empty()) {
     llvm::DenseMap<IdentifierInfo*,AsmLabelAttr*>::iterator I =
       ExtnameUndeclaredIdentifiers.find(NewFD->getIdentifier());
@@ -10277,7 +10281,7 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
   CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(NewFD);
   if (!getLangOpts().CPlusPlus14 && MD && MD->isConstexpr() &&
       !MD->isStatic() && !isa<CXXConstructorDecl>(MD) &&
-      !MD->getMethodQualifiers().hasConst()) {
+      !isa<CXXDestructorDecl>(MD) && !MD->getMethodQualifiers().hasConst()) {
     CXXMethodDecl *OldMD = nullptr;
     if (OldDecl)
       OldMD = dyn_cast_or_null<CXXMethodDecl>(OldDecl->getAsFunction());
@@ -16559,7 +16563,7 @@ void Sema::ActOnFields(Scope *S, SourceLocation RecLoc, Decl *EnclosingDecl,
       else if (Context.getAsArrayType(FD->getType())) {
         QualType BaseType = Context.getBaseElementType(FD->getType());
         if (BaseType->isRecordType() &&
-            BaseType->getAs<RecordType>()->getDecl()->hasObjectMember())
+            BaseType->castAs<RecordType>()->getDecl()->hasObjectMember())
           Record->setHasObjectMember(true);
         else if (BaseType->isObjCObjectPointerType() ||
                  BaseType.isObjCGCStrong())
@@ -17555,8 +17559,8 @@ void Sema::ActOnPragmaRedefineExtname(IdentifierInfo* Name,
                                          LookupOrdinaryName);
   AttributeCommonInfo Info(AliasName, SourceRange(AliasNameLoc),
                            AttributeCommonInfo::AS_Pragma);
-  AsmLabelAttr *Attr =
-      AsmLabelAttr::CreateImplicit(Context, AliasName->getName(), Info);
+  AsmLabelAttr *Attr = AsmLabelAttr::CreateImplicit(
+      Context, AliasName->getName(), /*LiteralLabel=*/true, Info);
 
   // If a declaration that:
   // 1) declares a function or a variable

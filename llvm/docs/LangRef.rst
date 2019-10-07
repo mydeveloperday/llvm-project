@@ -1786,7 +1786,8 @@ example:
     requires strict floating-point semantics.  LLVM will not attempt any
     optimizations that require assumptions about the floating-point rounding
     mode or that might alter the state of floating-point status flags that
-    might otherwise be set or cleared by calling this function.
+    might otherwise be set or cleared by calling this function. LLVM will
+    not introduce any new floating-point instructions that may trap.
 ``"thunk"``
     This attribute indicates that the function will delegate to some other
     function with a tail call. The prototype of a thunk should not be used for
@@ -3861,12 +3862,12 @@ ARM and ARM's Thumb2 mode:
   as ``r``.
 - ``h``: In Thumb2 mode, a high 32-bit GPR register (``r8-r15``). In ARM mode,
   invalid.
-- ``w``: A 32, 64, or 128-bit floating-point/SIMD register: ``s0-s31``,
-  ``d0-d31``, or ``q0-q15``.
-- ``x``: A 32, 64, or 128-bit floating-point/SIMD register: ``s0-s15``,
-  ``d0-d7``, or ``q0-q3``.
-- ``t``: A low floating-point/SIMD register: ``s0-s31``, ``d0-d16``, or
-  ``q0-q8``.
+- ``w``: A 32, 64, or 128-bit floating-point/SIMD register in the ranges
+  ``s0-s31``, ``d0-d31``, or ``q0-q15``, respectively.
+- ``t``: A 32, 64, or 128-bit floating-point/SIMD register in the ranges
+  ``s0-s31``, ``d0-d15``, or ``q0-q7``, respectively.
+- ``x``: A 32, 64, or 128-bit floating-point/SIMD register in the ranges
+  ``s0-s15``, ``d0-d7``, or ``q0-q3``, respectively.
 
 ARM's Thumb1 mode:
 
@@ -3881,12 +3882,12 @@ ARM's Thumb1 mode:
 - ``r``: A low 32-bit GPR register (``r0-r7``).
 - ``l``: A low 32-bit GPR register (``r0-r7``).
 - ``h``: A high GPR register (``r0-r7``).
-- ``w``: A 32, 64, or 128-bit floating-point/SIMD register: ``s0-s31``,
-  ``d0-d31``, or ``q0-q15``.
-- ``x``: A 32, 64, or 128-bit floating-point/SIMD register: ``s0-s15``,
-  ``d0-d7``, or ``q0-q3``.
-- ``t``: A low floating-point/SIMD register: ``s0-s31``, ``d0-d16``, or
-  ``q0-q8``.
+- ``w``: A 32, 64, or 128-bit floating-point/SIMD register in the ranges
+  ``s0-s31``, ``d0-d31``, or ``q0-q15``, respectively.
+- ``t``: A 32, 64, or 128-bit floating-point/SIMD register in the ranges
+  ``s0-s31``, ``d0-d15``, or ``q0-q7``, respectively.
+- ``x``: A 32, 64, or 128-bit floating-point/SIMD register in the ranges
+  ``s0-s15``, ``d0-d7``, or ``q0-q3``, respectively.
 
 
 Hexagon:
@@ -7070,7 +7071,7 @@ Syntax:
 ::
 
       <result> = callbr [cconv] [ret attrs] [addrspace(<num>)] <ty>|<fnty> <fnptrval>(<function args>) [fn attrs]
-                    [operand bundles] to label <normal label> or jump [other labels]
+                    [operand bundles] to label <normal label> [other labels]
 
 Overview:
 """""""""
@@ -7114,7 +7115,8 @@ This instruction requires several arguments:
 #. '``normal label``': the label reached when the called function
    executes a '``ret``' instruction.
 #. '``other labels``': the labels reached when a callee transfers control
-   to a location other than the normal '``normal label``'
+   to a location other than the normal '``normal label``'. The blockaddress
+   constant for these should also be in the list of '``function args``'.
 #. The optional :ref:`function attributes <fnattrs>` list.
 #. The optional :ref:`operand bundles <opbundles>` list.
 
@@ -7136,7 +7138,7 @@ Example:
 .. code-block:: text
 
       callbr void asm "", "r,x"(i32 %x, i8 *blockaddress(@foo, %fail))
-                  to label %normal or jump [label %fail]
+                  to label %normal [label %fail]
 
 .. _i_resume:
 
@@ -10067,7 +10069,7 @@ Syntax:
 
 ::
 
-      <result> = phi <ty> [ <val0>, <label0>], ...
+      <result> = phi [fast-math-flags] <ty> [ <val0>, <label0>], ...
 
 Overview:
 """""""""
@@ -10093,6 +10095,12 @@ For the purposes of the SSA form, the use of each incoming value is
 deemed to occur on the edge from the corresponding predecessor block to
 the current block (but after any definition of an '``invoke``'
 instruction's return value on the same edge).
+
+The optional ``fast-math-flags`` marker indicates that the phi has one
+or more :ref:`fast-math-flags <fastmath>`. These are optimization hints
+to enable otherwise unsafe floating-point optimizations. Fast-math-flags
+are only valid for phis that return a floating-point scalar or vector
+type.
 
 Semantics:
 """"""""""
@@ -13953,12 +13961,12 @@ The expression:
 
       %0 = call float @llvm.fmuladd.f32(%a, %b, %c)
 
-is equivalent to the expression a \* b + c, except that rounding will
-not be performed between the multiplication and addition steps if the
-code generator fuses the operations. Fusion is not guaranteed, even if
-the target platform supports it. If a fused multiply-add is required, the
-corresponding :ref:`llvm.fma <int_fma>` intrinsic function should be used
-instead. This never sets errno, just as '``llvm.fma.*``'.
+is equivalent to the expression a \* b + c, except that it is unspecified
+whether rounding will be performed between the multiplication and addition
+steps. Fusion is not guaranteed, even if the target platform supports it.
+If a fused multiply-add is required, the corresponding
+:ref:`llvm.fma <int_fma>` intrinsic function should be used instead.
+This never sets errno, just as '``llvm.fma.*``'.
 
 Examples:
 """""""""
@@ -15148,6 +15156,14 @@ example, a series of FP operations that each may raise exceptions may be
 vectorized into a single instruction that raises each unique exception a single
 time.
 
+Proper :ref:`function attributes <fnattrs>` usage is required for the
+constrained intrinsics to function correctly.
+
+All function *calls* done in a function that uses constrained floating
+point intrinsics must have the ``strictfp`` attribute.
+
+All function *definitions* that use constrained floating point intrinsics
+must have the ``strictfp`` attribute.
 
 '``llvm.experimental.constrained.fadd``' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -15924,6 +15940,102 @@ mode is determined by the runtime floating-point environment.  The rounding
 mode argument is only intended as information to the compiler.
 
 
+'``llvm.experimental.constrained.lrint``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare <inttype>
+      @llvm.experimental.constrained.lrint(<fptype> <op1>,
+                                           metadata <rounding mode>,
+                                           metadata <exception behavior>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.constrained.lrint``' intrinsic returns the first
+operand rounded to the nearest integer. An inexact floating-point exception
+will be raised if the operand is not an integer. An invalid exception is
+raised if the result is too large to fit into a supported integer type,
+and in this case the result is undefined.
+
+Arguments:
+""""""""""
+
+The first argument is a floating-point number. The return value is an
+integer type. Not all types are supported on all targets. The supported
+types are the same as the ``llvm.lrint`` intrinsic and the ``lrint``
+libm functions.
+
+The second and third arguments specify the rounding mode and exception
+behavior as described above.
+
+Semantics:
+""""""""""
+
+This function returns the same values as the libm ``lrint`` functions
+would, and handles error conditions in the same way.
+
+The rounding mode is described, not determined, by the rounding mode
+argument.  The actual rounding mode is determined by the runtime floating-point
+environment.  The rounding mode argument is only intended as information
+to the compiler.
+
+If the runtime floating-point environment is using the default rounding mode
+then the results will be the same as the llvm.lrint intrinsic.
+
+
+'``llvm.experimental.constrained.llrint``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare <inttype>
+      @llvm.experimental.constrained.llrint(<fptype> <op1>,
+                                            metadata <rounding mode>,
+                                            metadata <exception behavior>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.constrained.llrint``' intrinsic returns the first
+operand rounded to the nearest integer. An inexact floating-point exception
+will be raised if the operand is not an integer. An invalid exception is
+raised if the result is too large to fit into a supported integer type,
+and in this case the result is undefined.
+
+Arguments:
+""""""""""
+
+The first argument is a floating-point number. The return value is an
+integer type. Not all types are supported on all targets. The supported
+types are the same as the ``llvm.llrint`` intrinsic and the ``llrint``
+libm functions.
+
+The second and third arguments specify the rounding mode and exception
+behavior as described above.
+
+Semantics:
+""""""""""
+
+This function returns the same values as the libm ``llrint`` functions
+would, and handles error conditions in the same way.
+
+The rounding mode is described, not determined, by the rounding mode
+argument.  The actual rounding mode is determined by the runtime floating-point
+environment.  The rounding mode argument is only intended as information
+to the compiler.
+
+If the runtime floating-point environment is using the default rounding mode
+then the results will be the same as the llvm.llrint intrinsic.
+
+
 '``llvm.experimental.constrained.nearbyint``' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -16143,6 +16255,82 @@ Semantics:
 """"""""""
 
 This function returns the same values as the libm ``round`` functions
+would and handles error conditions in the same way.
+
+
+'``llvm.experimental.constrained.lround``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare <inttype>
+      @llvm.experimental.constrained.lround(<fptype> <op1>,
+                                            metadata <exception behavior>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.constrained.lround``' intrinsic returns the first
+operand rounded to the nearest integer with ties away from zero.  It will
+raise an inexact floating-point exception if the operand is not an integer.
+An invalid exception is raised if the result is too large to fit into a
+supported integer type, and in this case the result is undefined.
+
+Arguments:
+""""""""""
+
+The first argument is a floating-point number. The return value is an
+integer type. Not all types are supported on all targets. The supported
+types are the same as the ``llvm.lround`` intrinsic and the ``lround``
+libm functions.
+
+The second argument specifies the exception behavior as described above.
+
+Semantics:
+""""""""""
+
+This function returns the same values as the libm ``lround`` functions
+would and handles error conditions in the same way.
+
+
+'``llvm.experimental.constrained.llround``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare <inttype>
+      @llvm.experimental.constrained.llround(<fptype> <op1>,
+                                             metadata <exception behavior>)
+      
+Overview:
+"""""""""
+
+The '``llvm.experimental.constrained.llround``' intrinsic returns the first
+operand rounded to the nearest integer with ties away from zero. It will
+raise an inexact floating-point exception if the operand is not an integer.
+An invalid exception is raised if the result is too large to fit into a
+supported integer type, and in this case the result is undefined.
+
+Arguments:
+""""""""""
+
+The first argument is a floating-point number. The return value is an
+integer type. Not all types are supported on all targets. The supported
+types are the same as the ``llvm.llround`` intrinsic and the ``llround``
+libm functions.
+
+The second argument specifies the exception behavior as described above.
+
+Semantics:
+""""""""""
+
+This function returns the same values as the libm ``llround`` functions
 would and handles error conditions in the same way.
 
 

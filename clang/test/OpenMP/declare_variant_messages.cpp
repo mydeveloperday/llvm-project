@@ -8,7 +8,7 @@
 int foo();
 
 template <typename T>
-T foofoo();
+T foofoo(); // expected-note 2 {{declared here}}
 
 #pragma omp declare variant                                  // expected-error {{expected '(' after 'declare variant'}}
 #pragma omp declare variant(                                 // expected-error {{expected expression}} expected-error {{expected ')'}} expected-note {{to match this '('}}
@@ -29,6 +29,15 @@ T foofoo();
 #pragma omp declare variant(foofoo <int>) match(xxx = {vvv})
 #pragma omp declare variant(foofoo <int>) match(xxx = {vvv} xxx) // expected-error {{expected ','}} expected-error {{expected '=' after 'xxx' context selector set name on 'omp declare variant' directive}}
 #pragma omp declare variant(foofoo <int>) match(xxx = {vvv}) xxx // expected-warning {{extra tokens at the end of '#pragma omp declare variant' are ignored}}
+#pragma omp declare variant(foofoo <int>) match(implementation={xxx}) // expected-warning {{unknown context selector in 'implementation' context selector set of 'omp declare variant' directive, ignored}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor}) // expected-error {{expected '(' after 'vendor'}} expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}} expected-error {{expected ')' or ',' after 'vendor name'}} expected-error {{expected ')'}} expected-note {{to match this '('}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(}) // expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}} expected-error {{expected ')' or ',' after 'vendor name'}} expected-error {{expected ')'}} expected-note {{to match this '('}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor()}) // expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score ibm)}) // expected-error {{expected '(' after 'score'}} expected-warning {{missing ':' after context selector score clause - ignoring}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score( ibm)}) // expected-error {{expected ')' or ',' after 'vendor name'}} expected-error {{expected ')'}} expected-error {{use of undeclared identifier 'ibm'}} expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}} expected-warning {{missing ':' after context selector score clause - ignoring}} expected-note {{to match this '('}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score(2 ibm)}) // expected-error {{expected ')' or ',' after 'vendor name'}} expected-error 2 {{expected ')'}} expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}} expected-warning {{missing ':' after context selector score clause - ignoring}} expected-note 2 {{to match this '('}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score(foofoo <int>()) ibm)}) // expected-warning {{missing ':' after context selector score clause - ignoring}} expected-error {{expression is not an integral constant expression}} expected-note {{non-constexpr function 'foofoo<int>' cannot be used in a constant expression}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score(5): ibm)})
 int bar();
 
 #pragma omp declare variant                            // expected-error {{expected '(' after 'declare variant'}}
@@ -53,7 +62,12 @@ int bar();
 #pragma omp declare variant(foofoo <T>) match(user = {condition(<expr>)})
 #pragma omp declare variant(foofoo <T>) match(xxx = {vvv} xxx) // expected-error {{expected ','}} expected-error {{expected '=' after 'xxx' context selector set name on 'omp declare variant' directive}}
 #pragma omp declare variant(foofoo <T>) match(xxx = {vvv}) xxx // expected-warning {{extra tokens at the end of '#pragma omp declare variant' are ignored}}
-template <typename T>
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score ibm)}) // expected-error {{expected '(' after 'score'}} expected-warning {{missing ':' after context selector score clause - ignoring}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score( ibm)}) // expected-error {{expected ')' or ',' after 'vendor name'}} expected-error {{expected ')'}} expected-error {{use of undeclared identifier 'ibm'}} expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}} expected-warning {{missing ':' after context selector score clause - ignoring}} expected-note {{to match this '('}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score(C ibm)}) // expected-error {{expected ')' or ',' after 'vendor name'}} expected-error 2 {{expected ')'}} expected-error {{expected vendor identifier in 'vendor' context selector of 'implementation' selector set of 'omp declare variant' directive}} expected-warning {{missing ':' after context selector score clause - ignoring}} expected-note 2 {{to match this '('}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score(foofoo <int>()) ibm)}) // expected-warning {{missing ':' after context selector score clause - ignoring}} expected-error {{expression is not an integral constant expression}} expected-note {{non-constexpr function 'foofoo<int>' cannot be used in a constant expression}}
+#pragma omp declare variant(foofoo <int>) match(implementation={vendor(score(C+5): ibm)})
+template <typename T, int C>
 T barbar();
 
 // expected-error@+2 {{'#pragma omp declare variant' can only be applied to functions}}
@@ -98,9 +112,7 @@ void h(C *hp, C *hp2, C *hq, C *lin) {
 // expected-error@+1 {{variant in '#pragma omp declare variant' with type '<overloaded function type>' is incompatible with type 'void (*)(int *, int *, int *, int *)'}}
 #pragma omp declare variant(barbar <int>) match(xxx = {})
 template <>
-void h(int *hp, int *hp2, int *hq, int *lin) {
-  h((float *)hp, (float *)hp2, (float *)hq, (float *)lin);
-}
+void h(int *hp, int *hp2, int *hq, int *lin);
 
 int after_use_variant(void);
 int after_use();
@@ -108,7 +120,7 @@ int bar() {
   return after_use();
 }
 
-// expected-error@+1 {{'#pragma omp declare variant' cannot be applied for function after first usage}}
+// expected-warning@+1 {{'#pragma omp declare variant' cannot be applied for function after first usage; the original function might be used}}
 #pragma omp declare variant(after_use_variant) match(xxx = {})
 int after_use(void);
 
@@ -172,6 +184,11 @@ int fn_deduced();
 int fn_deduced_variant1();
 #pragma omp declare variant(fn_deduced_variant1) match(xxx = {})
 auto fn_deduced1() { return 0; }
+
+auto fn_deduced3() { return 0; }
+// expected-warning@+1 {{'#pragma omp declare variant' cannot be applied to the function that was defined already; the original function might be used}}
+#pragma omp declare variant(fn_deduced_variant1) match(xxx = {})
+auto fn_deduced3();
 
 auto fn_deduced_variant2() { return 0; }
 // expected-error@+1 {{variant in '#pragma omp declare variant' with type 'int ()' is incompatible with type 'float (*)()'}}

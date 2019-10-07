@@ -1011,21 +1011,21 @@ def : Pat<(f64 (extractelt v2f64:$S, 1)),
           (f64 (EXTRACT_SUBREG $S, sub_64))>;
 }
 
-// Additional fnmsub patterns: -a*c + b == -(a*c - b)
-def : Pat<(fma (fneg f64:$A), f64:$C, f64:$B),
-          (XSNMSUBADP $B, $C, $A)>;
-def : Pat<(fma f64:$A, (fneg f64:$C), f64:$B),
-          (XSNMSUBADP $B, $C, $A)>;
+// Additional fnmsub patterns: -a*b + c == -(a*b - c)
+def : Pat<(fma (fneg f64:$A), f64:$B, f64:$C),
+          (XSNMSUBADP $C, $A, $B)>;
+def : Pat<(fma f64:$A, (fneg f64:$B), f64:$C),
+          (XSNMSUBADP $C, $A, $B)>;
 
-def : Pat<(fma (fneg v2f64:$A), v2f64:$C, v2f64:$B),
-          (XVNMSUBADP $B, $C, $A)>;
-def : Pat<(fma v2f64:$A, (fneg v2f64:$C), v2f64:$B),
-          (XVNMSUBADP $B, $C, $A)>;
+def : Pat<(fma (fneg v2f64:$A), v2f64:$B, v2f64:$C),
+          (XVNMSUBADP $C, $A, $B)>;
+def : Pat<(fma v2f64:$A, (fneg v2f64:$B), v2f64:$C),
+          (XVNMSUBADP $C, $A, $B)>;
 
-def : Pat<(fma (fneg v4f32:$A), v4f32:$C, v4f32:$B),
-          (XVNMSUBASP $B, $C, $A)>;
-def : Pat<(fma v4f32:$A, (fneg v4f32:$C), v4f32:$B),
-          (XVNMSUBASP $B, $C, $A)>;
+def : Pat<(fma (fneg v4f32:$A), v4f32:$B, v4f32:$C),
+          (XVNMSUBASP $C, $A, $B)>;
+def : Pat<(fma v4f32:$A, (fneg v4f32:$B), v4f32:$C),
+          (XVNMSUBASP $C, $A, $B)>;
 
 def : Pat<(v2f64 (bitconvert v4f32:$A)),
           (COPY_TO_REGCLASS $A, VSRC)>;
@@ -1511,6 +1511,12 @@ let AddedComplexity = 400 in { // Prefer VSX patterns over non-VSX patterns.
                           RegConstraint<"$XTi = $XT">, NoEncode<"$XTi">,
                           AltVSXFMARel;
   }
+
+  // Additional xsnmsubasp patterns: -a*b + c == -(a*b - c)
+  def : Pat<(fma (fneg f32:$A), f32:$B, f32:$C),
+            (XSNMSUBASP $C, $A, $B)>;
+  def : Pat<(fma f32:$A, (fneg f32:$B), f32:$C),
+            (XSNMSUBASP $C, $A, $B)>;
 
   // Single Precision Conversions (FP <-> INT)
   def XSCVSXDSP : XX2Form<60, 312,
@@ -2650,9 +2656,9 @@ let AddedComplexity = 400, Predicates = [HasP9Vector] in {
                                       (fneg (int_ppc_fmaf128_round_to_odd
                                       f128:$vA, f128:$vB, (fneg f128:$vTi))))]>;
 
-  // Additional fnmsub patterns: -a*c + b == -(a*c - b)
-  def : Pat<(fma (fneg f128:$A), f128:$C, f128:$B), (XSNMSUBQP $B, $C, $A)>;
-  def : Pat<(fma f128:$A, (fneg f128:$C), f128:$B), (XSNMSUBQP $B, $C, $A)>;
+  // Additional fnmsub patterns: -a*b + c == -(a*b - c)
+  def : Pat<(fma (fneg f128:$A), f128:$B, f128:$C), (XSNMSUBQP $C, $A, $B)>;
+  def : Pat<(fma f128:$A, (fneg f128:$B), f128:$C), (XSNMSUBQP $C, $A, $B)>;
 
   //===--------------------------------------------------------------------===//
   // Quad/Double-Precision Compare Instructions:
@@ -2868,12 +2874,12 @@ let AddedComplexity = 400, Predicates = [HasP9Vector] in {
                               (outs vsrc:$XT), (ins u7imm:$DCMX, vsrc:$XB),
                               "xvtstdcsp $XT, $XB, $DCMX", IIC_VecFP,
                               [(set v4i32: $XT,
-                               (int_ppc_vsx_xvtstdcsp v4f32:$XB, imm:$DCMX))]>;
+                               (int_ppc_vsx_xvtstdcsp v4f32:$XB, timm:$DCMX))]>;
   def XVTSTDCDP : XX2_RD6_DCMX7_RS6<60, 15, 5,
                               (outs vsrc:$XT), (ins u7imm:$DCMX, vsrc:$XB),
                               "xvtstdcdp $XT, $XB, $DCMX", IIC_VecFP,
                               [(set v2i64: $XT,
-                               (int_ppc_vsx_xvtstdcdp v2f64:$XB, imm:$DCMX))]>;
+                               (int_ppc_vsx_xvtstdcdp v2f64:$XB, timm:$DCMX))]>;
 
   //===--------------------------------------------------------------------===//
 

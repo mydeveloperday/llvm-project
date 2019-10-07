@@ -173,11 +173,7 @@ public:
   void printVersionInfo() override;
   void printGroupSections() override;
 
-  void printAttributes() override;
-  void printMipsPLTGOT() override;
-  void printMipsABIFlags() override;
-  void printMipsReginfo() override;
-  void printMipsOptions() override;
+  void printArchSpecificInfo() override;
 
   void printStackMap() const override;
 
@@ -217,6 +213,10 @@ private:
     return checkDRI({ObjF->getELFFile()->base() + S->sh_offset, S->sh_size,
                      S->sh_entsize, ObjF->getFileName()});
   }
+
+  void printAttributes();
+  void printMipsReginfo();
+  void printMipsOptions();
 
   std::pair<const Elf_Phdr *, const Elf_Shdr *>
   findDynamic(const ELFFile<ELFT> *Obj);
@@ -302,7 +302,7 @@ public:
   void getSectionNameIndex(const Elf_Sym *Symbol, const Elf_Sym *FirstSym,
                            StringRef &SectionName,
                            unsigned &SectionIndex) const;
-  std::string getStaticSymbolName(uint32_t Index) const;
+  Expected<std::string> getStaticSymbolName(uint32_t Index) const;
   std::string getDynamicString(uint64_t Value) const;
   StringRef getSymbolVersionByIndex(StringRef StrTab,
                                     uint32_t VersionSymbolIndex,
@@ -429,6 +429,7 @@ public:
   virtual void printStackSizeEntry(uint64_t Size, StringRef FuncName) = 0;
   virtual void printMipsGOT(const MipsGOTParser<ELFT> &Parser) = 0;
   virtual void printMipsPLT(const MipsGOTParser<ELFT> &Parser) = 0;
+  virtual void printMipsABIFlags(const ELFObjectFile<ELFT> *Obj) = 0;
   const ELFDumper<ELFT> *dumper() const { return Dumper; }
 
 protected:
@@ -480,6 +481,7 @@ public:
   void printStackSizeEntry(uint64_t Size, StringRef FuncName) override;
   void printMipsGOT(const MipsGOTParser<ELFT> &Parser) override;
   void printMipsPLT(const MipsGOTParser<ELFT> &Parser) override;
+  void printMipsABIFlags(const ELFObjectFile<ELFT> *Obj) override;
 
 private:
   struct Field {
@@ -586,6 +588,7 @@ public:
   void printStackSizeEntry(uint64_t Size, StringRef FuncName) override;
   void printMipsGOT(const MipsGOTParser<ELFT> &Parser) override;
   void printMipsPLT(const MipsGOTParser<ELFT> &Parser) override;
+  void printMipsABIFlags(const ELFObjectFile<ELFT> *Obj) override;
 
 private:
   void printRelocation(const ELFO *Obj, Elf_Rela Rel, const Elf_Shdr *SymTab);
@@ -751,17 +754,22 @@ static std::string maybeDemangle(StringRef Name) {
 }
 
 template <typename ELFT>
-std::string ELFDumper<ELFT>::getStaticSymbolName(uint32_t Index) const {
+Expected<std::string>
+ELFDumper<ELFT>::getStaticSymbolName(uint32_t Index) const {
   const ELFFile<ELFT> *Obj = ObjF->getELFFile();
-  StringRef StrTable = unwrapOrError(
-      ObjF->getFileName(), Obj->getStringTableForSymtab(*DotSymtabSec));
-  Elf_Sym_Range Syms =
-      unwrapOrError(ObjF->getFileName(), Obj->symbols(DotSymtabSec));
-  if (Index >= Syms.size())
-    reportError(createError("Invalid symbol index"), ObjF->getFileName());
-  const Elf_Sym *Sym = &Syms[Index];
-  return maybeDemangle(
-      unwrapOrError(ObjF->getFileName(), Sym->getName(StrTable)));
+  Expected<const typename ELFT::Sym *> SymOrErr =
+      Obj->getSymbol(DotSymtabSec, Index);
+  if (!SymOrErr)
+    return SymOrErr.takeError();
+
+  Expected<StringRef> StrTabOrErr = Obj->getStringTableForSymtab(*DotSymtabSec);
+  if (!StrTabOrErr)
+    return StrTabOrErr.takeError();
+
+  Expected<StringRef> NameOrErr = (*SymOrErr)->getName(*StrTabOrErr);
+  if (!NameOrErr)
+    return NameOrErr.takeError();
+  return maybeDemangle(*NameOrErr);
 }
 
 template <typename ELFT>
@@ -2210,6 +2218,30 @@ template <typename ELFT> void ELFDumper<ELFT>::printLoadName() {
   W.printString("LoadName", SOName);
 }
 
+template <class ELFT> void ELFDumper<ELFT>::printArchSpecificInfo() {
+  const ELFFile<ELFT> *Obj = ObjF->getELFFile();
+  switch (Obj->getHeader()->e_machine) {
+  case EM_ARM:
+    printAttributes();
+    break;
+  case EM_MIPS: {
+    ELFDumperStyle->printMipsABIFlags(ObjF);
+    printMipsOptions();
+    printMipsReginfo();
+
+    MipsGOTParser<ELFT> Parser(Obj, ObjF->getFileName(), dynamic_table(),
+                               dynamic_symbols());
+    if (Parser.hasGot())
+      ELFDumperStyle->printMipsGOT(Parser);
+    if (Parser.hasPlt())
+      ELFDumperStyle->printMipsPLT(Parser);
+    break;
+  }
+  default:
+    break;
+  }
+}
+
 template <class ELFT> void ELFDumper<ELFT>::printAttributes() {
   W.startLine() << "Attributes not implemented.\n";
 }
@@ -2315,7 +2347,7 @@ MipsGOTParser<ELFT>::MipsGOTParser(const ELFO *Obj, StringRef FileName,
   if (IsStatic) {
     GotSec = findSectionByName(*Obj, FileName, ".got");
     if (!GotSec)
-      reportError(createError("Cannot find .got section"), FileName);
+      return;
 
     ArrayRef<uint8_t> Content =
         unwrapOrError(FileName, Obj->getSectionContents(GotSec));
@@ -2517,20 +2549,6 @@ MipsGOTParser<ELFT>::getPltSym(const Entry *E) const {
   }
 }
 
-template <class ELFT> void ELFDumper<ELFT>::printMipsPLTGOT() {
-  const ELFFile<ELFT> *Obj = ObjF->getELFFile();
-  if (Obj->getHeader()->e_machine != EM_MIPS)
-    reportError(createError("MIPS PLT GOT is available for MIPS targets only"),
-                ObjF->getFileName());
-
-  MipsGOTParser<ELFT> Parser(Obj, ObjF->getFileName(), dynamic_table(),
-                             dynamic_symbols());
-  if (Parser.hasGot())
-    ELFDumperStyle->printMipsGOT(Parser);
-  if (Parser.hasPlt())
-    ELFDumperStyle->printMipsPLT(Parser);
-}
-
 static const EnumEntry<unsigned> ElfMipsISAExtType[] = {
   {"None",                    Mips::AFL_EXT_NONE},
   {"Broadcom SB-1",           Mips::AFL_EXT_SB1},
@@ -2602,43 +2620,6 @@ static int getMipsRegisterSize(uint8_t Flag) {
   default:
     return -1;
   }
-}
-
-template <class ELFT> void ELFDumper<ELFT>::printMipsABIFlags() {
-  const ELFFile<ELFT> *Obj = ObjF->getELFFile();
-  const Elf_Shdr *Shdr =
-      findSectionByName(*Obj, ObjF->getFileName(), ".MIPS.abiflags");
-  if (!Shdr) {
-    W.startLine() << "There is no .MIPS.abiflags section in the file.\n";
-    return;
-  }
-  ArrayRef<uint8_t> Sec =
-      unwrapOrError(ObjF->getFileName(), Obj->getSectionContents(Shdr));
-  if (Sec.size() != sizeof(Elf_Mips_ABIFlags<ELFT>)) {
-    W.startLine() << "The .MIPS.abiflags section has a wrong size.\n";
-    return;
-  }
-
-  auto *Flags = reinterpret_cast<const Elf_Mips_ABIFlags<ELFT> *>(Sec.data());
-
-  raw_ostream &OS = W.getOStream();
-  DictScope GS(W, "MIPS ABI Flags");
-
-  W.printNumber("Version", Flags->version);
-  W.startLine() << "ISA: ";
-  if (Flags->isa_rev <= 1)
-    OS << format("MIPS%u", Flags->isa_level);
-  else
-    OS << format("MIPS%ur%u", Flags->isa_level, Flags->isa_rev);
-  OS << "\n";
-  W.printEnum("ISA Extension", Flags->isa_ext, makeArrayRef(ElfMipsISAExtType));
-  W.printFlags("ASEs", Flags->ases, makeArrayRef(ElfMipsASEFlags));
-  W.printEnum("FP ABI", Flags->fp_abi, makeArrayRef(ElfMipsFpABIType));
-  W.printNumber("GPR size", getMipsRegisterSize(Flags->gpr_size));
-  W.printNumber("CPR1 size", getMipsRegisterSize(Flags->cpr1_size));
-  W.printNumber("CPR2 size", getMipsRegisterSize(Flags->cpr2_size));
-  W.printFlags("Flags 1", Flags->flags1, makeArrayRef(ElfMipsFlags1));
-  W.printHex("Flags 2", Flags->flags2);
 }
 
 template <class ELFT>
@@ -3437,10 +3418,21 @@ template <class ELFT> void GNUStyle<ELFT>::printHashSymbols(const ELFO *Obj) {
     for (uint32_t Buc = 0; Buc < SysVHash->nbucket; Buc++) {
       if (Buckets[Buc] == ELF::STN_UNDEF)
         continue;
+      std::vector<bool> Visited(SysVHash->nchain);
       for (uint32_t Ch = Buckets[Buc]; Ch < SysVHash->nchain; Ch = Chains[Ch]) {
         if (Ch == ELF::STN_UNDEF)
           break;
+
+        if (Visited[Ch]) {
+          reportWarning(
+              createError(".hash section is invalid: bucket " + Twine(Ch) +
+                          ": a cycle was detected in the linked chain"),
+              this->FileName);
+          break;
+        }
+
         printHashedSymbol(Obj, &DynSyms[0], Ch, StringTable, Buc);
+        Visited[Ch] = true;
       }
     }
   }
@@ -4060,7 +4052,7 @@ void GNUStyle<ELFT>::printCGProfile(const ELFFile<ELFT> *Obj) {
 
 template <class ELFT>
 void GNUStyle<ELFT>::printAddrsig(const ELFFile<ELFT> *Obj) {
-    OS << "GNUStyle::printAddrsig not implemented\n";
+  reportError(createError("--addrsig: not implemented"), this->FileName);
 }
 
 static StringRef getGenericNoteTypeName(const uint32_t NT) {
@@ -4639,10 +4631,9 @@ void GNUStyle<ELFT>::printNotes(const ELFFile<ELFT> *Obj) {
         OS << "    " << N.Type << ":\n        " << N.Value << '\n';
     } else if (Name == "CORE") {
       if (Type == ELF::NT_FILE) {
-        DataExtractor DescExtractor(
-            StringRef(reinterpret_cast<const char *>(Descriptor.data()),
-                      Descriptor.size()),
-            ELFT::TargetEndianness == support::little, sizeof(Elf_Addr));
+        DataExtractor DescExtractor(Descriptor,
+                                    ELFT::TargetEndianness == support::little,
+                                    sizeof(Elf_Addr));
         Expected<CoreNote> Note = readCoreNote(DescExtractor);
         if (Note)
           printCoreNote<ELFT>(OS, *Note);
@@ -4689,6 +4680,26 @@ void GNUStyle<ELFT>::printELFLinkerOptions(const ELFFile<ELFT> *Obj) {
   OS << "printELFLinkerOptions not implemented!\n";
 }
 
+// Used for printing section names in places where possible errors can be
+// ignored.
+static StringRef getSectionName(const SectionRef &Sec) {
+  Expected<StringRef> NameOrErr = Sec.getName();
+  if (NameOrErr)
+    return *NameOrErr;
+  consumeError(NameOrErr.takeError());
+  return "<?>";
+}
+
+// Used for printing symbol names in places where possible errors can be
+// ignored.
+static std::string getSymbolName(const ELFSymbolRef &Sym) {
+  Expected<StringRef> NameOrErr = Sym.getName();
+  if (NameOrErr)
+    return maybeDemangle(*NameOrErr);
+  consumeError(NameOrErr.takeError());
+  return "<?>";
+}
+
 template <class ELFT>
 void DumpStyle<ELFT>::printFunctionStackSize(
     const ELFObjectFile<ELFT> *Obj, uint64_t SymValue, SectionRef FunctionSec,
@@ -4713,18 +4724,12 @@ void DumpStyle<ELFT>::printFunctionStackSize(
 
   std::string FuncName = "?";
   // A valid SymbolRef has a non-null object file pointer.
-  if (FuncSym.BasicSymbolRef::getObject()) {
-    // Extract the symbol name.
-    Expected<StringRef> FuncNameOrErr = FuncSym.getName();
-    if (FuncNameOrErr)
-      FuncName = maybeDemangle(*FuncNameOrErr);
-    else
-      consumeError(FuncNameOrErr.takeError());
-  } else {
+  if (FuncSym.BasicSymbolRef::getObject())
+    FuncName = getSymbolName(FuncSym);
+  else
     reportWarning(
         createError("could not identify function symbol for stack size entry"),
         Obj->getFileName());
-  }
 
   // Extract the size. The expectation is that Offset is pointing to the right
   // place, i.e. past the function address.
@@ -4766,23 +4771,17 @@ void DumpStyle<ELFT>::printStackSize(const ELFObjectFile<ELFT> *Obj,
     // Ensure that the relocation symbol is in the function section, i.e. the
     // section where the functions whose stack sizes we are reporting are
     // located.
-    StringRef SymName = "?";
-    Expected<StringRef> NameOrErr = RelocSym->getName();
-    if (NameOrErr)
-      SymName = *NameOrErr;
-    else
-      consumeError(NameOrErr.takeError());
-
     auto SectionOrErr = RelocSym->getSection();
     if (!SectionOrErr) {
       reportWarning(
-          createError("cannot identify the section for relocation symbol " +
-                      SymName),
+          createError("cannot identify the section for relocation symbol '" +
+                      getSymbolName(*RelocSym) + "'"),
           FileStr);
       consumeError(SectionOrErr.takeError());
     } else if (*SectionOrErr != FunctionSec) {
-      reportWarning(createError("relocation symbol " + SymName +
-                                " is not in the expected section"),
+      reportWarning(createError("relocation symbol '" +
+                                getSymbolName(*RelocSym) +
+                                "' is not in the expected section"),
                     FileStr);
       // Pretend that the symbol is in the correct section and report its
       // stack size anyway.
@@ -4811,16 +4810,6 @@ void DumpStyle<ELFT>::printStackSize(const ELFObjectFile<ELFT> *Obj,
                                Data, &Offset);
 }
 
-// Used for printing section names in places where possible errors can be
-// ignored.
-static StringRef getSectionName(const SectionRef &Sec) {
-  Expected<StringRef> NameOrErr = Sec.getName();
-  if (NameOrErr)
-    return *NameOrErr;
-  consumeError(NameOrErr.takeError());
-  return "<?>";
-}
-
 template <class ELFT>
 void DumpStyle<ELFT>::printNonRelocatableStackSizes(
     const ELFObjectFile<ELFT> *Obj, std::function<void()> PrintHeader) {
@@ -4830,16 +4819,13 @@ void DumpStyle<ELFT>::printNonRelocatableStackSizes(
   StringRef FileStr = Obj->getFileName();
   for (const SectionRef &Sec : Obj->sections()) {
     StringRef SectionName = getSectionName(Sec);
-    if (!SectionName.startswith(".stack_sizes"))
+    if (SectionName != ".stack_sizes")
       continue;
     PrintHeader();
     const Elf_Shdr *ElfSec = Obj->getSection(Sec.getRawDataRefImpl());
     ArrayRef<uint8_t> Contents =
         unwrapOrError(this->FileName, EF->getSectionContents(ElfSec));
-    DataExtractor Data(
-        StringRef(reinterpret_cast<const char *>(Contents.data()),
-                  Contents.size()),
-        Obj->isLittleEndian(), sizeof(Elf_Addr));
+    DataExtractor Data(Contents, Obj->isLittleEndian(), sizeof(Elf_Addr));
     // A .stack_sizes section header's sh_link field is supposed to point
     // to the section that contains the functions whose stack sizes are
     // described in it.
@@ -4883,7 +4869,7 @@ void DumpStyle<ELFT>::printRelocatableStackSizes(
 
     // A stack size section that we haven't encountered yet is mapped to the
     // null section until we find its corresponding relocation section.
-    if (SectionName.startswith(".stack_sizes"))
+    if (SectionName == ".stack_sizes")
       if (StackSizeRelocMap.count(Sec) == 0) {
         StackSizeRelocMap[Sec] = NullSection;
         continue;
@@ -4904,7 +4890,7 @@ void DumpStyle<ELFT>::printRelocatableStackSizes(
       consumeError(ContentsSectionNameOrErr.takeError());
       continue;
     }
-    if (!ContentsSectionNameOrErr->startswith(".stack_sizes"))
+    if (*ContentsSectionNameOrErr != ".stack_sizes")
       continue;
     // Insert a mapping from the stack sizes section to its relocation section.
     StackSizeRelocMap[Obj->toSectionRef(ContentsSec)] = Sec;
@@ -4937,12 +4923,9 @@ void DumpStyle<ELFT>::printRelocatableStackSizes(
     RelocationResolver Resolver;
     std::tie(IsSupportedFn, Resolver) = getRelocationResolver(*Obj);
     auto Contents = unwrapOrError(this->FileName, StackSizesSec.getContents());
-    DataExtractor Data(
-        StringRef(reinterpret_cast<const char *>(Contents.data()),
-                  Contents.size()),
-        Obj->isLittleEndian(), sizeof(Elf_Addr));
+    DataExtractor Data(Contents, Obj->isLittleEndian(), sizeof(Elf_Addr));
     for (const RelocationRef &Reloc : RelocSec.relocations()) {
-      if (!IsSupportedFn(Reloc.getType()))
+      if (!IsSupportedFn || !IsSupportedFn(Reloc.getType()))
         reportError(createStringError(
                         object_error::parse_failed,
                         "unsupported relocation type in section %s: %s",
@@ -5098,6 +5081,45 @@ void GNUStyle<ELFT>::printMipsPLT(const MipsGOTParser<ELFT> &Parser) {
       OS << SymName << "\n";
     }
   }
+}
+
+template <class ELFT>
+void GNUStyle<ELFT>::printMipsABIFlags(const ELFObjectFile<ELFT> *ObjF) {
+  const ELFFile<ELFT> *Obj = ObjF->getELFFile();
+  const Elf_Shdr *Shdr =
+      findSectionByName(*Obj, ObjF->getFileName(), ".MIPS.abiflags");
+  if (!Shdr)
+    return;
+
+  ArrayRef<uint8_t> Sec =
+      unwrapOrError(ObjF->getFileName(), Obj->getSectionContents(Shdr));
+  if (Sec.size() != sizeof(Elf_Mips_ABIFlags<ELFT>))
+    reportError(createError(".MIPS.abiflags section has a wrong size"),
+                ObjF->getFileName());
+
+  auto *Flags = reinterpret_cast<const Elf_Mips_ABIFlags<ELFT> *>(Sec.data());
+
+  OS << "MIPS ABI Flags Version: " << Flags->version << "\n\n";
+  OS << "ISA: MIPS" << int(Flags->isa_level);
+  if (Flags->isa_rev > 1)
+    OS << "r" << int(Flags->isa_rev);
+  OS << "\n";
+  OS << "GPR size: " << getMipsRegisterSize(Flags->gpr_size) << "\n";
+  OS << "CPR1 size: " << getMipsRegisterSize(Flags->cpr1_size) << "\n";
+  OS << "CPR2 size: " << getMipsRegisterSize(Flags->cpr2_size) << "\n";
+  OS << "FP ABI: " << printEnum(Flags->fp_abi, makeArrayRef(ElfMipsFpABIType))
+     << "\n";
+  OS << "ISA Extension: "
+     << printEnum(Flags->isa_ext, makeArrayRef(ElfMipsISAExtType)) << "\n";
+  if (Flags->ases == 0)
+    OS << "ASEs: None\n";
+  else
+    // FIXME: Print each flag on a separate line.
+    OS << "ASEs: " << printFlags(Flags->ases, makeArrayRef(ElfMipsASEFlags))
+       << "\n";
+  OS << "FLAGS 1: " << format_hex_no_prefix(Flags->flags1, 8, false) << "\n";
+  OS << "FLAGS 2: " << format_hex_no_prefix(Flags->flags2, 8, false) << "\n";
+  OS << "\n";
 }
 
 template <class ELFT> void LLVMStyle<ELFT>::printFileHeaders(const ELFO *Obj) {
@@ -5706,12 +5728,33 @@ void LLVMStyle<ELFT>::printCGProfile(const ELFFile<ELFT> *Obj) {
                           this->dumper()->getDotCGProfileSec()));
   for (const Elf_CGProfile &CGPE : CGProfile) {
     DictScope D(W, "CGProfileEntry");
-    W.printNumber("From", this->dumper()->getStaticSymbolName(CGPE.cgp_from),
-                  CGPE.cgp_from);
-    W.printNumber("To", this->dumper()->getStaticSymbolName(CGPE.cgp_to),
-                  CGPE.cgp_to);
+    W.printNumber(
+        "From",
+        unwrapOrError(this->FileName,
+                      this->dumper()->getStaticSymbolName(CGPE.cgp_from)),
+        CGPE.cgp_from);
+    W.printNumber(
+        "To",
+        unwrapOrError(this->FileName,
+                      this->dumper()->getStaticSymbolName(CGPE.cgp_to)),
+        CGPE.cgp_to);
     W.printNumber("Weight", CGPE.cgp_weight);
   }
+}
+
+static Expected<std::vector<uint64_t>> toULEB128Array(ArrayRef<uint8_t> Data) {
+  std::vector<uint64_t> Ret;
+  const uint8_t *Cur = Data.begin();
+  const uint8_t *End = Data.end();
+  while (Cur != End) {
+    unsigned Size;
+    const char *Err;
+    Ret.push_back(decodeULEB128(Cur, &Size, End, &Err));
+    if (Err)
+      return createError(Err);
+    Cur += Size;
+  }
+  return Ret;
 }
 
 template <class ELFT>
@@ -5722,18 +5765,20 @@ void LLVMStyle<ELFT>::printAddrsig(const ELFFile<ELFT> *Obj) {
   ArrayRef<uint8_t> Contents = unwrapOrError(
       this->FileName,
       Obj->getSectionContents(this->dumper()->getDotAddrsigSec()));
-  const uint8_t *Cur = Contents.begin();
-  const uint8_t *End = Contents.end();
-  while (Cur != End) {
-    unsigned Size;
-    const char *Err;
-    uint64_t SymIndex = decodeULEB128(Cur, &Size, End, &Err);
-    if (Err)
-      reportError(createError(Err), this->FileName);
+  Expected<std::vector<uint64_t>> V = toULEB128Array(Contents);
+  if (!V) {
+    reportWarning(V.takeError(), this->FileName);
+    return;
+  }
 
-    W.printNumber("Sym", this->dumper()->getStaticSymbolName(SymIndex),
-                  SymIndex);
-    Cur += Size;
+  for (uint64_t Sym : *V) {
+    Expected<std::string> NameOrErr = this->dumper()->getStaticSymbolName(Sym);
+    if (NameOrErr) {
+      W.printNumber("Sym", *NameOrErr, Sym);
+      continue;
+    }
+    reportWarning(NameOrErr.takeError(), this->FileName);
+    W.printNumber("Sym", "<?>", Sym);
   }
 }
 
@@ -5831,10 +5876,9 @@ void LLVMStyle<ELFT>::printNotes(const ELFFile<ELFT> *Obj) {
         W.printString(N.Type, N.Value);
     } else if (Name == "CORE") {
       if (Type == ELF::NT_FILE) {
-        DataExtractor DescExtractor(
-            StringRef(reinterpret_cast<const char *>(Descriptor.data()),
-                      Descriptor.size()),
-            ELFT::TargetEndianness == support::little, sizeof(Elf_Addr));
+        DataExtractor DescExtractor(Descriptor,
+                                    ELFT::TargetEndianness == support::little,
+                                    sizeof(Elf_Addr));
         Expected<CoreNote> Note = readCoreNote(DescExtractor);
         if (Note)
           printCoreNoteLLVMStyle(*Note, W);
@@ -5899,13 +5943,18 @@ void LLVMStyle<ELFT>::printELFLinkerOptions(const ELFFile<ELFT> *Obj) {
 
 template <class ELFT>
 void LLVMStyle<ELFT>::printStackSizes(const ELFObjectFile<ELFT> *Obj) {
-  W.printString(
-      "Dumping of stack sizes in LLVM style is not implemented yet\n");
+  ListScope L(W, "StackSizes");
+  if (Obj->isRelocatableObject())
+    this->printRelocatableStackSizes(Obj, []() {});
+  else
+    this->printNonRelocatableStackSizes(Obj, []() {});
 }
 
 template <class ELFT>
 void LLVMStyle<ELFT>::printStackSizeEntry(uint64_t Size, StringRef FuncName) {
-  // FIXME: Implement this function for LLVM-style dumping.
+  DictScope D(W, "Entry");
+  W.printString("Function", FuncName);
+  W.printHex("Size", Size);
 }
 
 template <class ELFT>
@@ -6017,4 +6066,42 @@ void LLVMStyle<ELFT>::printMipsPLT(const MipsGOTParser<ELFT> &Parser) {
       W.printNumber("Name", SymName, Sym->st_name);
     }
   }
+}
+
+template <class ELFT>
+void LLVMStyle<ELFT>::printMipsABIFlags(const ELFObjectFile<ELFT> *ObjF) {
+  const ELFFile<ELFT> *Obj = ObjF->getELFFile();
+  const Elf_Shdr *Shdr =
+      findSectionByName(*Obj, ObjF->getFileName(), ".MIPS.abiflags");
+  if (!Shdr) {
+    W.startLine() << "There is no .MIPS.abiflags section in the file.\n";
+    return;
+  }
+  ArrayRef<uint8_t> Sec =
+      unwrapOrError(ObjF->getFileName(), Obj->getSectionContents(Shdr));
+  if (Sec.size() != sizeof(Elf_Mips_ABIFlags<ELFT>)) {
+    W.startLine() << "The .MIPS.abiflags section has a wrong size.\n";
+    return;
+  }
+
+  auto *Flags = reinterpret_cast<const Elf_Mips_ABIFlags<ELFT> *>(Sec.data());
+
+  raw_ostream &OS = W.getOStream();
+  DictScope GS(W, "MIPS ABI Flags");
+
+  W.printNumber("Version", Flags->version);
+  W.startLine() << "ISA: ";
+  if (Flags->isa_rev <= 1)
+    OS << format("MIPS%u", Flags->isa_level);
+  else
+    OS << format("MIPS%ur%u", Flags->isa_level, Flags->isa_rev);
+  OS << "\n";
+  W.printEnum("ISA Extension", Flags->isa_ext, makeArrayRef(ElfMipsISAExtType));
+  W.printFlags("ASEs", Flags->ases, makeArrayRef(ElfMipsASEFlags));
+  W.printEnum("FP ABI", Flags->fp_abi, makeArrayRef(ElfMipsFpABIType));
+  W.printNumber("GPR size", getMipsRegisterSize(Flags->gpr_size));
+  W.printNumber("CPR1 size", getMipsRegisterSize(Flags->cpr1_size));
+  W.printNumber("CPR2 size", getMipsRegisterSize(Flags->cpr2_size));
+  W.printFlags("Flags 1", Flags->flags1, makeArrayRef(ElfMipsFlags1));
+  W.printHex("Flags 2", Flags->flags2);
 }

@@ -364,8 +364,6 @@ llvm::createLibcall(MachineIRBuilder &MIRBuilder, RTLIB::Libcall Libcall,
   auto &TLI = *MIRBuilder.getMF().getSubtarget().getTargetLowering();
   const char *Name = TLI.getLibcallName(Libcall);
 
-  MIRBuilder.getMF().getFrameInfo().setHasCalls(true);
-
   CallLowering::CallLoweringInfo Info;
   Info.CallConv = TLI.getLibcallCallingConv(Libcall);
   Info.Callee = MachineOperand::CreateES(Name);
@@ -397,7 +395,8 @@ llvm::createMemLibcall(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
   auto &Ctx = MIRBuilder.getMF().getFunction().getContext();
 
   SmallVector<CallLowering::ArgInfo, 3> Args;
-  for (unsigned i = 1; i < MI.getNumOperands(); i++) {
+  // Add all the args, except for the last which is an imm denoting 'tail'.
+  for (unsigned i = 1; i < MI.getNumOperands() - 1; i++) {
     Register Reg = MI.getOperand(i).getReg();
 
     // Need derive an IR type for call lowering.
@@ -430,13 +429,13 @@ llvm::createMemLibcall(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
   const char *Name = TLI.getLibcallName(RTLibcall);
 
   MIRBuilder.setInstr(MI);
-  MIRBuilder.getMF().getFrameInfo().setHasCalls(true);
 
   CallLowering::CallLoweringInfo Info;
   Info.CallConv = TLI.getLibcallCallingConv(RTLibcall);
   Info.Callee = MachineOperand::CreateES(Name);
   Info.OrigRet = CallLowering::ArgInfo({0}, Type::getVoidTy(Ctx));
-  Info.IsTailCall = isLibCallInTailPosition(MI);
+  Info.IsTailCall = MI.getOperand(MI.getNumOperands() - 1).getImm() == 1 &&
+                    isLibCallInTailPosition(MI);
 
   std::copy(Args.begin(), Args.end(), std::back_inserter(Info.OrigArgs));
   if (!CLI.lowerCall(MIRBuilder, Info))
@@ -1623,13 +1622,15 @@ LegalizerHelper::widenScalar(MachineInstr &MI, unsigned TypeIdx, LLT WideTy) {
 
   case TargetOpcode::G_FPTOSI:
   case TargetOpcode::G_FPTOUI:
-    if (TypeIdx != 0)
-      return UnableToLegalize;
     Observer.changingInstr(MI);
-    widenScalarDst(MI, WideTy);
+
+    if (TypeIdx == 0)
+      widenScalarDst(MI, WideTy);
+    else
+      widenScalarSrc(MI, WideTy, 1, TargetOpcode::G_FPEXT);
+
     Observer.changedInstr(MI);
     return Legalized;
-
   case TargetOpcode::G_SITOFP:
     if (TypeIdx != 1)
       return UnableToLegalize;
@@ -2246,6 +2247,8 @@ LegalizerHelper::lower(MachineInstr &MI, unsigned TypeIdx, LLT Ty) {
     return lowerShuffleVector(MI);
   case G_DYN_STACKALLOC:
     return lowerDynStackAlloc(MI);
+  case G_EXTRACT:
+    return lowerExtract(MI);
   }
 }
 
@@ -4097,4 +4100,37 @@ LegalizerHelper::lowerDynStackAlloc(MachineInstr &MI) {
 
   MI.eraseFromParent();
   return Legalized;
+}
+
+LegalizerHelper::LegalizeResult
+LegalizerHelper::lowerExtract(MachineInstr &MI) {
+  Register Dst = MI.getOperand(0).getReg();
+  Register Src = MI.getOperand(1).getReg();
+  unsigned Offset = MI.getOperand(2).getImm();
+
+  LLT DstTy = MRI.getType(Dst);
+  LLT SrcTy = MRI.getType(Src);
+
+  if (DstTy.isScalar() &&
+      (SrcTy.isScalar() ||
+       (SrcTy.isVector() && DstTy == SrcTy.getElementType()))) {
+    LLT SrcIntTy = SrcTy;
+    if (!SrcTy.isScalar()) {
+      SrcIntTy = LLT::scalar(SrcTy.getSizeInBits());
+      Src = MIRBuilder.buildBitcast(SrcIntTy, Src).getReg(0);
+    }
+
+    if (Offset == 0)
+      MIRBuilder.buildTrunc(Dst, Src);
+    else {
+      auto ShiftAmt = MIRBuilder.buildConstant(SrcIntTy, Offset);
+      auto Shr = MIRBuilder.buildLShr(SrcIntTy, Src, ShiftAmt);
+      MIRBuilder.buildTrunc(Dst, Shr);
+    }
+
+    MI.eraseFromParent();
+    return Legalized;
+  }
+
+  return UnableToLegalize;
 }

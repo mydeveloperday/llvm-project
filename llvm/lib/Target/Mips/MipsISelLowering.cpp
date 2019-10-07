@@ -514,13 +514,12 @@ MipsTargetLowering::MipsTargetLowering(const MipsTargetMachine &TM,
     setLibcallName(RTLIB::SRA_I128, nullptr);
   }
 
-  setMinFunctionAlignment(Subtarget.isGP64bit() ? llvm::Align(8)
-                                                : llvm::Align(4));
+  setMinFunctionAlignment(Subtarget.isGP64bit() ? Align(8) : Align(4));
 
   // The arguments on the stack are defined in terms of 4-byte slots on O32
   // and 8-byte slots on N32/N64.
-  setMinStackArgumentAlignment((ABI.IsN32() || ABI.IsN64()) ? llvm::Align(8)
-                                                            : llvm::Align(4));
+  setMinStackArgumentAlignment((ABI.IsN32() || ABI.IsN64()) ? Align(8)
+                                                            : Align(4));
 
   setStackPointerRegisterToSaveRestore(ABI.IsN64() ? Mips::SP_64 : Mips::SP);
 
@@ -2148,7 +2147,7 @@ SDValue MipsTargetLowering::lowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   EVT VT = Node->getValueType(0);
   SDValue Chain = Node->getOperand(0);
   SDValue VAListPtr = Node->getOperand(1);
-  const llvm::Align Align =
+  const Align Align =
       llvm::MaybeAlign(Node->getConstantOperandVal(3)).valueOrOne();
   const Value *SV = cast<SrcValueSDNode>(Node->getOperand(2))->getValue();
   SDLoc DL(Node);
@@ -2869,7 +2868,7 @@ static bool CC_MipsO32(unsigned ValNo, MVT ValVT, MVT LocVT,
 #include "MipsGenCallingConv.inc"
 
  CCAssignFn *MipsTargetLowering::CCAssignFnForCall() const{
-   return CC_Mips;
+   return CC_Mips_FixedArg;
  }
 
  CCAssignFn *MipsTargetLowering::CCAssignFnForReturn() const{
@@ -4567,20 +4566,20 @@ MachineBasicBlock *MipsTargetLowering::emitPseudoD_SELECT(MachineInstr &MI,
 
 // FIXME? Maybe this could be a TableGen attribute on some registers and
 // this table could be generated automatically from RegInfo.
-unsigned MipsTargetLowering::getRegisterByName(const char* RegName, EVT VT,
-                                               SelectionDAG &DAG) const {
+Register MipsTargetLowering::getRegisterByName(const char* RegName, EVT VT,
+                                               const MachineFunction &MF) const {
   // Named registers is expected to be fairly rare. For now, just support $28
   // since the linux kernel uses it.
   if (Subtarget.isGP64bit()) {
-    unsigned Reg = StringSwitch<unsigned>(RegName)
+    Register Reg = StringSwitch<Register>(RegName)
                          .Case("$28", Mips::GP_64)
-                         .Default(0);
+                         .Default(Register());
     if (Reg)
       return Reg;
   } else {
-    unsigned Reg = StringSwitch<unsigned>(RegName)
+    Register Reg = StringSwitch<Register>(RegName)
                          .Case("$28", Mips::GP)
-                         .Default(0);
+                         .Default(Register());
     if (Reg)
       return Reg;
   }

@@ -641,11 +641,10 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   EnableExtLdPromotion = true;
 
   // Set required alignment.
-  setMinFunctionAlignment(llvm::Align(4));
+  setMinFunctionAlignment(Align(4));
   // Set preferred alignments.
-  setPrefLoopAlignment(llvm::Align(1ULL << STI.getPrefLoopLogAlignment()));
-  setPrefFunctionAlignment(
-      llvm::Align(1ULL << STI.getPrefFunctionLogAlignment()));
+  setPrefLoopAlignment(Align(1ULL << STI.getPrefLoopLogAlignment()));
+  setPrefFunctionAlignment(Align(1ULL << STI.getPrefFunctionLogAlignment()));
 
   // Only change the limit for entries in a jump table if specified by
   // the sub target, but not at the command line.
@@ -5490,9 +5489,9 @@ SDValue AArch64TargetLowering::LowerSPONENTRY(SDValue Op,
 
 // FIXME? Maybe this could be a TableGen attribute on some registers and
 // this table could be generated automatically from RegInfo.
-unsigned AArch64TargetLowering::getRegisterByName(const char* RegName, EVT VT,
-                                                  SelectionDAG &DAG) const {
-  unsigned Reg = MatchRegisterName(RegName);
+Register AArch64TargetLowering::
+getRegisterByName(const char* RegName, EVT VT, const MachineFunction &MF) const {
+  Register Reg = MatchRegisterName(RegName);
   if (AArch64::X1 <= Reg && Reg <= AArch64::X28) {
     const MCRegisterInfo *MRI = Subtarget->getRegisterInfo();
     unsigned DwarfRegNum = MRI->getDwarfRegNum(Reg, false);
@@ -10332,6 +10331,14 @@ static SDValue tryCombineShiftImm(unsigned IID, SDNode *N, SelectionDAG &DAG) {
     Opcode = AArch64ISD::SQSHLU_I;
     IsRightShift = false;
     break;
+  case Intrinsic::aarch64_neon_sshl:
+  case Intrinsic::aarch64_neon_ushl:
+    // For positive shift amounts we can use SHL, as ushl/sshl perform a regular
+    // left shift for positive shift amounts. Below, we only replace the current
+    // node with VSHL, if this condition is met.
+    Opcode = AArch64ISD::VSHL;
+    IsRightShift = false;
+    break;
   }
 
   if (IsRightShift && ShiftAmount <= -1 && ShiftAmount >= -(int)ElemBits) {
@@ -10418,6 +10425,8 @@ static SDValue performIntrinsicCombine(SDNode *N,
   case Intrinsic::aarch64_neon_sqshlu:
   case Intrinsic::aarch64_neon_srshl:
   case Intrinsic::aarch64_neon_urshl:
+  case Intrinsic::aarch64_neon_sshl:
+  case Intrinsic::aarch64_neon_ushl:
     return tryCombineShiftImm(IID, N, DAG);
   case Intrinsic::aarch64_crc32b:
   case Intrinsic::aarch64_crc32cb:

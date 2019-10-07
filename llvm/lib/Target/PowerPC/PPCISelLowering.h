@@ -733,8 +733,8 @@ namespace llvm {
     SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                           SmallVectorImpl<SDNode *> &Created) const override;
 
-    unsigned getRegisterByName(const char* RegName, EVT VT,
-                               SelectionDAG &DAG) const override;
+    Register getRegisterByName(const char* RegName, EVT VT,
+                               const MachineFunction &MF) const override;
 
     void computeKnownBitsForTargetNode(const SDValue Op,
                                        KnownBits &Known,
@@ -742,7 +742,7 @@ namespace llvm {
                                        const SelectionDAG &DAG,
                                        unsigned Depth = 0) const override;
 
-    llvm::Align getPrefLoopAlignment(MachineLoop *ML) const override;
+    Align getPrefLoopAlignment(MachineLoop *ML) const override;
 
     bool shouldInsertFencesForAtomic(const Instruction *I) const override {
       return true;

@@ -2619,24 +2619,18 @@ void SelectionDAGBuilder::visitBitTestHeader(BitTestBlock &B,
                                              MachineBasicBlock *SwitchBB) {
   SDLoc dl = getCurSDLoc();
 
-  // Subtract the minimum value
+  // Subtract the minimum value.
   SDValue SwitchOp = getValue(B.SValue);
   EVT VT = SwitchOp.getValueType();
-  SDValue Sub = DAG.getNode(ISD::SUB, dl, VT, SwitchOp,
-                            DAG.getConstant(B.First, dl, VT));
-
-  // Check range
-  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
-  SDValue RangeCmp = DAG.getSetCC(
-      dl, TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(),
-                                 Sub.getValueType()),
-      Sub, DAG.getConstant(B.Range, dl, VT), ISD::SETUGT);
+  SDValue RangeSub =
+      DAG.getNode(ISD::SUB, dl, VT, SwitchOp, DAG.getConstant(B.First, dl, VT));
 
   // Determine the type of the test operands.
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   bool UsePtrType = false;
-  if (!TLI.isTypeLegal(VT))
+  if (!TLI.isTypeLegal(VT)) {
     UsePtrType = true;
-  else {
+  } else {
     for (unsigned i = 0, e = B.Cases.size(); i != e; ++i)
       if (!isUIntN(VT.getSizeInBits(), B.Cases[i].Mask)) {
         // Switch table case range are encoded into series of masks.
@@ -2645,6 +2639,7 @@ void SelectionDAGBuilder::visitBitTestHeader(BitTestBlock &B,
         break;
       }
   }
+  SDValue Sub = RangeSub;
   if (UsePtrType) {
     VT = TLI.getPointerTy(DAG.getDataLayout());
     Sub = DAG.getZExtOrTrunc(Sub, dl, VT);
@@ -2656,20 +2651,29 @@ void SelectionDAGBuilder::visitBitTestHeader(BitTestBlock &B,
 
   MachineBasicBlock* MBB = B.Cases[0].ThisBB;
 
-  addSuccessorWithProb(SwitchBB, B.Default, B.DefaultProb);
+  if (!B.OmitRangeCheck)
+    addSuccessorWithProb(SwitchBB, B.Default, B.DefaultProb);
   addSuccessorWithProb(SwitchBB, MBB, B.Prob);
   SwitchBB->normalizeSuccProbs();
 
-  SDValue BrRange = DAG.getNode(ISD::BRCOND, dl,
-                                MVT::Other, CopyTo, RangeCmp,
-                                DAG.getBasicBlock(B.Default));
+  SDValue Root = CopyTo;
+  if (!B.OmitRangeCheck) {
+    // Conditional branch to the default block.
+    SDValue RangeCmp = DAG.getSetCC(dl,
+        TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(),
+                               RangeSub.getValueType()),
+        RangeSub, DAG.getConstant(B.Range, dl, RangeSub.getValueType()),
+        ISD::SETUGT);
+
+    Root = DAG.getNode(ISD::BRCOND, dl, MVT::Other, Root, RangeCmp,
+                       DAG.getBasicBlock(B.Default));
+  }
 
   // Avoid emitting unnecessary branches to the next block.
   if (MBB != NextBlock(SwitchBB))
-    BrRange = DAG.getNode(ISD::BR, dl, MVT::Other, BrRange,
-                          DAG.getBasicBlock(MBB));
+    Root = DAG.getNode(ISD::BR, dl, MVT::Other, Root, DAG.getBasicBlock(MBB));
 
-  DAG.setRoot(BrRange);
+  DAG.setRoot(Root);
 }
 
 /// visitBitTestCase - this function produces one "bit test"
@@ -4668,10 +4672,11 @@ void SelectionDAGBuilder::visitAtomicLoad(const LoadInst &I) {
       L = DAG.getPtrExtOrTrunc(L, dl, VT);
 
     setValue(&I, L);
-    if (!I.isUnordered()) {
-      SDValue OutChain = L.getValue(1);
+    SDValue OutChain = L.getValue(1);
+    if (!I.isUnordered())
       DAG.setRoot(OutChain);
-    }
+    else
+      PendingLoads.push_back(OutChain);
     return;
   }
   
@@ -4768,8 +4773,22 @@ void SelectionDAGBuilder::visitTargetIntrinsic(const CallInst &I,
 
   // Add all operands of the call to the operand list.
   for (unsigned i = 0, e = I.getNumArgOperands(); i != e; ++i) {
-    SDValue Op = getValue(I.getArgOperand(i));
-    Ops.push_back(Op);
+    const Value *Arg = I.getArgOperand(i);
+    if (!I.paramHasAttr(i, Attribute::ImmArg)) {
+      Ops.push_back(getValue(Arg));
+      continue;
+    }
+
+    // Use TargetConstant instead of a regular constant for immarg.
+    EVT VT = TLI.getValueType(*DL, Arg->getType(), true);
+    if (const ConstantInt *CI = dyn_cast<ConstantInt>(Arg)) {
+      assert(CI->getBitWidth() <= 64 &&
+             "large intrinsic immediates not handled");
+      Ops.push_back(DAG.getTargetConstant(*CI, SDLoc(), VT));
+    } else {
+      Ops.push_back(
+          DAG.getTargetConstantFP(*cast<ConstantFP>(Arg), SDLoc(), VT));
+    }
   }
 
   SmallVector<EVT, 4> ValueVTs;
@@ -5955,65 +5974,6 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
   case Intrinsic::masked_compressstore:
     visitMaskedStore(I, true /* IsCompressing */);
     return;
-  case Intrinsic::x86_mmx_pslli_w:
-  case Intrinsic::x86_mmx_pslli_d:
-  case Intrinsic::x86_mmx_pslli_q:
-  case Intrinsic::x86_mmx_psrli_w:
-  case Intrinsic::x86_mmx_psrli_d:
-  case Intrinsic::x86_mmx_psrli_q:
-  case Intrinsic::x86_mmx_psrai_w:
-  case Intrinsic::x86_mmx_psrai_d: {
-    SDValue ShAmt = getValue(I.getArgOperand(1));
-    if (isa<ConstantSDNode>(ShAmt)) {
-      visitTargetIntrinsic(I, Intrinsic);
-      return;
-    }
-    unsigned NewIntrinsic = 0;
-    EVT ShAmtVT = MVT::v2i32;
-    switch (Intrinsic) {
-    case Intrinsic::x86_mmx_pslli_w:
-      NewIntrinsic = Intrinsic::x86_mmx_psll_w;
-      break;
-    case Intrinsic::x86_mmx_pslli_d:
-      NewIntrinsic = Intrinsic::x86_mmx_psll_d;
-      break;
-    case Intrinsic::x86_mmx_pslli_q:
-      NewIntrinsic = Intrinsic::x86_mmx_psll_q;
-      break;
-    case Intrinsic::x86_mmx_psrli_w:
-      NewIntrinsic = Intrinsic::x86_mmx_psrl_w;
-      break;
-    case Intrinsic::x86_mmx_psrli_d:
-      NewIntrinsic = Intrinsic::x86_mmx_psrl_d;
-      break;
-    case Intrinsic::x86_mmx_psrli_q:
-      NewIntrinsic = Intrinsic::x86_mmx_psrl_q;
-      break;
-    case Intrinsic::x86_mmx_psrai_w:
-      NewIntrinsic = Intrinsic::x86_mmx_psra_w;
-      break;
-    case Intrinsic::x86_mmx_psrai_d:
-      NewIntrinsic = Intrinsic::x86_mmx_psra_d;
-      break;
-    default: llvm_unreachable("Impossible intrinsic");  // Can't reach here.
-    }
-
-    // The vector shift intrinsics with scalars uses 32b shift amounts but
-    // the sse2/mmx shift instructions reads 64 bits. Set the upper 32 bits
-    // to be zero.
-    // We must do this early because v2i32 is not a legal type.
-    SDValue ShOps[2];
-    ShOps[0] = ShAmt;
-    ShOps[1] = DAG.getConstant(0, sdl, MVT::i32);
-    ShAmt =  DAG.getBuildVector(ShAmtVT, sdl, ShOps);
-    EVT DestVT = TLI.getValueType(DAG.getDataLayout(), I.getType());
-    ShAmt = DAG.getNode(ISD::BITCAST, sdl, DestVT, ShAmt);
-    Res = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, sdl, DestVT,
-                       DAG.getConstant(NewIntrinsic, sdl, MVT::i32),
-                       getValue(I.getArgOperand(0)), ShAmt);
-    setValue(&I, Res);
-    return;
-  }
   case Intrinsic::powi:
     setValue(&I, ExpandPowI(sdl, getValue(I.getArgOperand(0)),
                             getValue(I.getArgOperand(1)), DAG));
@@ -6144,12 +6104,16 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
   case Intrinsic::experimental_constrained_log:
   case Intrinsic::experimental_constrained_log10:
   case Intrinsic::experimental_constrained_log2:
+  case Intrinsic::experimental_constrained_lrint:
+  case Intrinsic::experimental_constrained_llrint:
   case Intrinsic::experimental_constrained_rint:
   case Intrinsic::experimental_constrained_nearbyint:
   case Intrinsic::experimental_constrained_maxnum:
   case Intrinsic::experimental_constrained_minnum:
   case Intrinsic::experimental_constrained_ceil:
   case Intrinsic::experimental_constrained_floor:
+  case Intrinsic::experimental_constrained_lround:
+  case Intrinsic::experimental_constrained_llround:
   case Intrinsic::experimental_constrained_round:
   case Intrinsic::experimental_constrained_trunc:
     visitConstrainedFPIntrinsic(cast<ConstrainedFPIntrinsic>(I));
@@ -6975,6 +6939,12 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
   case Intrinsic::experimental_constrained_log2:
     Opcode = ISD::STRICT_FLOG2;
     break;
+  case Intrinsic::experimental_constrained_lrint:
+    Opcode = ISD::STRICT_LRINT;
+    break;
+  case Intrinsic::experimental_constrained_llrint:
+    Opcode = ISD::STRICT_LLRINT;
+    break;
   case Intrinsic::experimental_constrained_rint:
     Opcode = ISD::STRICT_FRINT;
     break;
@@ -6992,6 +6962,12 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
     break;
   case Intrinsic::experimental_constrained_floor:
     Opcode = ISD::STRICT_FFLOOR;
+    break;
+  case Intrinsic::experimental_constrained_lround:
+    Opcode = ISD::STRICT_LROUND;
+    break;
+  case Intrinsic::experimental_constrained_llround:
+    Opcode = ISD::STRICT_LLROUND;
     break;
   case Intrinsic::experimental_constrained_round:
     Opcode = ISD::STRICT_FROUND;
@@ -10209,8 +10185,6 @@ void SelectionDAGBuilder::lowerWorkItem(SwitchWorkListItem W, Value *Cond,
         break;
       }
       case CC_BitTests: {
-        // FIXME: If Fallthrough is unreachable, skip the range check.
-
         // FIXME: Optimize away range check based on pivot comparisons.
         BitTestBlock *BTB = &SL->BitTestCases[I->BTCasesIndex];
 
@@ -10229,6 +10203,11 @@ void SelectionDAGBuilder::lowerWorkItem(SwitchWorkListItem W, Value *Cond,
         if (!BTB->ContiguousRange) {
           BTB->Prob += DefaultProb / 2;
           BTB->DefaultProb -= DefaultProb / 2;
+        }
+
+        if (FallthroughUnreachable) {
+          // Skip the range check if the fallthrough block is unreachable.
+          BTB->OmitRangeCheck = true;
         }
 
         // If we're in the right place, emit the bit test header right now.

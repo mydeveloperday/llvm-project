@@ -32,6 +32,8 @@ enum AccessKinds {
   AK_MemberCall,
   AK_DynamicCast,
   AK_TypeId,
+  AK_Construct,
+  AK_Destroy,
 };
 
 // The order of this enum is important for diagnostics.

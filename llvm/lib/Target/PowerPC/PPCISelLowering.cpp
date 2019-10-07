@@ -139,7 +139,7 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
   // On PPC32/64, arguments smaller than 4/8 bytes are extended, so all
   // arguments are at least 4/8 bytes aligned.
   bool isPPC64 = Subtarget.isPPC64();
-  setMinStackArgumentAlignment(isPPC64 ? llvm::Align(8) : llvm::Align(4));
+  setMinStackArgumentAlignment(isPPC64 ? Align(8) : Align(4));
 
   // Set up the register classes.
   addRegisterClass(MVT::i32, &PPC::GPRCRegClass);
@@ -1179,9 +1179,9 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
     setJumpIsExpensive();
   }
 
-  setMinFunctionAlignment(llvm::Align(4));
+  setMinFunctionAlignment(Align(4));
   if (Subtarget.isDarwin())
-    setPrefFunctionAlignment(llvm::Align(16));
+    setPrefFunctionAlignment(Align(16));
 
   switch (Subtarget.getDarwinDirective()) {
   default: break;
@@ -1198,8 +1198,8 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
   case PPC::DIR_PWR7:
   case PPC::DIR_PWR8:
   case PPC::DIR_PWR9:
-    setPrefLoopAlignment(llvm::Align(16));
-    setPrefFunctionAlignment(llvm::Align(16));
+    setPrefLoopAlignment(Align(16));
+    setPrefFunctionAlignment(Align(16));
     break;
   }
 
@@ -8187,7 +8187,7 @@ SDValue PPCTargetLowering::LowerBITCAST(SDValue Op, SelectionDAG &DAG) const {
                      Op0.getOperand(1));
 }
 
-const SDValue *getNormalLoadInput(const SDValue &Op) {
+static const SDValue *getNormalLoadInput(const SDValue &Op) {
   const SDValue *InputLoad = &Op;
   if (InputLoad->getOpcode() == ISD::BITCAST)
     InputLoad = &InputLoad->getOperand(0);
@@ -14110,7 +14110,7 @@ void PPCTargetLowering::computeKnownBitsForTargetNode(const SDValue Op,
   }
 }
 
-llvm::Align PPCTargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
+Align PPCTargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
   switch (Subtarget.getDarwinDirective()) {
   default: break;
   case PPC::DIR_970:
@@ -14131,7 +14131,7 @@ llvm::Align PPCTargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
       // Actual alignment of the loop will depend on the hotness check and other
       // logic in alignBlocks.
       if (ML->getLoopDepth() > 1 && ML->getSubLoops().empty())
-        return llvm::Align(32);
+        return Align(32);
     }
 
     const PPCInstrInfo *TII = Subtarget.getInstrInfo();
@@ -14147,7 +14147,7 @@ llvm::Align PPCTargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
       }
 
     if (LoopSize > 16 && LoopSize <= 32)
-      return llvm::Align(32);
+      return Align(32);
 
     break;
   }
@@ -14513,22 +14513,22 @@ SDValue PPCTargetLowering::LowerFRAMEADDR(SDValue Op,
 
 // FIXME? Maybe this could be a TableGen attribute on some registers and
 // this table could be generated automatically from RegInfo.
-unsigned PPCTargetLowering::getRegisterByName(const char* RegName, EVT VT,
-                                              SelectionDAG &DAG) const {
+Register PPCTargetLowering::getRegisterByName(const char* RegName, EVT VT,
+                                              const MachineFunction &MF) const {
   bool isPPC64 = Subtarget.isPPC64();
-  bool isDarwinABI = Subtarget.isDarwinABI();
+  bool IsDarwinABI = Subtarget.isDarwinABI();
 
   if ((isPPC64 && VT != MVT::i64 && VT != MVT::i32) ||
       (!isPPC64 && VT != MVT::i32))
     report_fatal_error("Invalid register global variable type");
 
   bool is64Bit = isPPC64 && VT == MVT::i64;
-  unsigned Reg = StringSwitch<unsigned>(RegName)
+  Register Reg = StringSwitch<Register>(RegName)
                    .Case("r1", is64Bit ? PPC::X1 : PPC::R1)
-                   .Case("r2", (isDarwinABI || isPPC64) ? 0 : PPC::R2)
-                   .Case("r13", (!isPPC64 && isDarwinABI) ? 0 :
+                   .Case("r2", (IsDarwinABI || isPPC64) ? Register() : PPC::R2)
+                   .Case("r13", (!isPPC64 && IsDarwinABI) ? Register() :
                                   (is64Bit ? PPC::X13 : PPC::R13))
-                   .Default(0);
+                   .Default(Register());
 
   if (Reg)
     return Reg;
@@ -14555,14 +14555,8 @@ bool PPCTargetLowering::isAccessedAsGotIndirect(SDValue GA) const {
   if (isa<JumpTableSDNode>(GA) || isa<BlockAddressSDNode>(GA))
     return true;
 
-  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(GA)) {
-    const GlobalValue *GV = G->getGlobal();
-    unsigned char GVFlags = Subtarget.classifyGlobalReference(GV);
-    // The NLP flag indicates that a global access has to use an
-    // extra indirection.
-    if (GVFlags & PPCII::MO_NLP_FLAG)
-      return true;
-  }
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(GA))
+    return Subtarget.isGVIndirectSymbol(G->getGlobal());
 
   return false;
 }

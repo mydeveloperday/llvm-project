@@ -2366,7 +2366,13 @@ def err_constexpr_tag : Error<
   "%select{class|struct|interface|union|enum}0 "
   "cannot be marked %sub{select_constexpr_spec_kind}1">;
 def err_constexpr_dtor : Error<
-  "destructor cannot be marked %sub{select_constexpr_spec_kind}0">;
+  "destructor cannot be declared %sub{select_constexpr_spec_kind}0">;
+def err_constexpr_dtor_subobject : Error<
+  "destructor cannot be declared %sub{select_constexpr_spec_kind}0 because "
+  "%select{data member %2|base class %3}1 does not have a "
+  "constexpr destructor">;
+def note_constexpr_dtor_subobject : Note<
+  "%select{data member %1|base class %2}0 declared here">;
 def err_constexpr_wrong_decl_kind : Error<
   "%sub{select_constexpr_spec_kind}0 can only be used "
   "in %select{|variable and function|function|variable}0 declarations">;
@@ -2378,6 +2384,8 @@ def err_constexpr_var_non_literal : Error<
   "constexpr variable cannot have non-literal type %0">;
 def err_constexpr_var_requires_const_init : Error<
   "constexpr variable %0 must be initialized by a constant expression">;
+def err_constexpr_var_requires_const_destruction : Error<
+  "constexpr variable %0 must have constant destruction">;
 def err_constexpr_redecl_mismatch : Error<
   "%select{non-constexpr|constexpr|consteval}1 declaration of %0"
   " follows %select{non-constexpr|constexpr|consteval}2 declaration">;
@@ -2469,8 +2477,6 @@ def warn_cxx11_compat_constexpr_body_multiple_return : Warning<
   InGroup<CXXPre14Compat>, DefaultIgnore;
 def note_constexpr_body_previous_return : Note<
   "previous return statement is here">;
-def err_constexpr_function_try_block : Error<
-  "function try block not allowed in constexpr %select{function|constructor}0">;
 
 // C++2a function try blocks in constexpr
 def ext_constexpr_function_try_block_cxx2a : ExtWarn<
@@ -2509,6 +2515,8 @@ def note_non_literal_user_provided_dtor : Note<
   "%0 is not literal because it has a user-provided destructor">;
 def note_non_literal_nontrivial_dtor : Note<
   "%0 is not literal because it has a non-trivial destructor">;
+def note_non_literal_non_constexpr_dtor : Note<
+  "%0 is not literal because its destructor is not constexpr">;
 def note_non_literal_lambda : Note<
   "lambda closure types are non-literal types before C++17">;
 def warn_private_extern : Warning<
@@ -3002,6 +3010,10 @@ def warn_gnu_inline_attribute_requires_inline : Warning<
   "'gnu_inline' attribute requires function to be marked 'inline',"
   " attribute ignored">,
   InGroup<IgnoredAttributes>;
+def warn_gnu_inline_cplusplus_without_extern : Warning<
+  "'gnu_inline' attribute without 'extern' in C++ treated as externally"
+  " available, this changed in Clang 10">,
+  InGroup<DiagGroup<"gnu-inline-cpp-without-extern">>;
 def err_attribute_vecreturn_only_vector_member : Error<
   "the vecreturn attribute can only be used on a class or structure with one member, which must be a vector">;
 def err_attribute_vecreturn_only_pod_record : Error<
@@ -3390,7 +3402,7 @@ def warn_address_of_reference_bool_conversion : Warning<
   InGroup<UndefinedBoolConversion>;
 
 def warn_xor_used_as_pow : Warning<
-  "result of '%0' is %1; did you mean an exponentiation?">,
+  "result of '%0' is %1; did you mean exponentiation?">,
   InGroup<XorUsedAsPow>;
 def warn_xor_used_as_pow_base_extra : Warning<
   "result of '%0' is %1; did you mean '%2' (%3)?">,
@@ -5422,9 +5434,6 @@ def err_arc_mismatched_cast : Error<
   " to %3 is disallowed with ARC">;
 def err_arc_nolifetime_behavior : Error<
   "explicit ownership qualifier on cast result has no effect">;
-def err_arc_objc_object_in_tag : Error<
-  "ARC forbids %select{Objective-C objects|blocks}0 in "
-  "%select{struct|interface|union|<<ERROR>>|enum}1">;
 def err_arc_objc_property_default_assign_on_object : Error<
   "ARC forbids synthesizing a property of an Objective-C object "
   "with unspecified ownership or storage attribute">;
@@ -5717,6 +5726,12 @@ def warn_precedence_conditional : Warning<
 def note_precedence_conditional_first : Note<
   "place parentheses around the '?:' expression to evaluate it first">;
 
+def warn_enum_constant_in_bool_context : Warning<
+  "converting the enum constant to a boolean">,
+  InGroup<IntInBoolContext>, DefaultIgnore;
+def warn_left_shift_in_bool_context : Warning<
+  "converting the result of '<<' to a boolean; did you mean '(%0) != 0'?">,
+  InGroup<IntInBoolContext>, DefaultIgnore;
 def warn_logical_instead_of_bitwise : Warning<
   "use of logical '%0' with constant operand">,
   InGroup<DiagGroup<"constant-logical-operand">>;
@@ -6142,10 +6157,22 @@ def warn_out_of_range_compare : Warning<
   InGroup<TautologicalOutOfRangeCompare>;
 def warn_tautological_bool_compare : Warning<warn_out_of_range_compare.Text>,
   InGroup<TautologicalConstantCompare>;
+def warn_integer_constants_in_conditional_always_true : Warning<
+  "converting the result of '?:' with integer constants to a boolean always "
+  "evaluates to 'true'">,
+  InGroup<TautologicalConstantCompare>;
+def warn_left_shift_always : Warning<
+  "converting the result of '<<' to a boolean always evaluates "
+  "to %select{false|true}0">,
+  InGroup<TautologicalConstantCompare>;
 def warn_comparison_of_mixed_enum_types : Warning<
   "comparison of two values with different enumeration types"
   "%diff{ ($ and $)|}0,1">,
   InGroup<EnumCompare>;
+def warn_conditional_mixed_enum_types : Warning<
+  "enumeration type mismatch in conditional expression"
+  "%diff{ ($ and $)|}0,1">,
+  InGroup<EnumCompareConditional>, DefaultIgnore;
 def warn_comparison_of_mixed_enum_types_switch : Warning<
   "comparison of two values with different enumeration types in switch statement"
   "%diff{ ($ and $)|}0,1">,
@@ -6184,6 +6211,8 @@ def err_invalid_qualified_function_type : Error<
 def err_compound_qualified_function_type : Error<
   "%select{block pointer|pointer|reference}0 to function type %select{%2 |}1"
   "cannot have '%3' qualifier">;
+def err_qualified_function_typeid : Error<
+  "type operand %0 of 'typeid' cannot have '%1' qualifier">;
 
 def err_ref_qualifier_overload : Error<
   "cannot overload a member function %select{without a ref-qualifier|with "
@@ -6608,6 +6637,9 @@ def note_member_declared_here : Note<
   "member %0 declared here">;
 def note_member_first_declared_here : Note<
   "member %0 first declared here">;
+def warn_bitwise_negation_bool : Warning<
+  "bitwise negation of a boolean expression; did you mean logical negation?">,
+  InGroup<DiagGroup<"bool-operation">>;
 def err_decrement_bool : Error<"cannot decrement expression of type bool">;
 def warn_increment_bool : Warning<
   "incrementing expression of type bool is deprecated and "
@@ -7615,8 +7647,6 @@ let CategoryName = "Inline Assembly Issue" in {
     "invalid lvalue in asm input for constraint '%0'">;
   def err_asm_invalid_input_constraint : Error<
     "invalid input constraint '%0' in asm">;
-  def err_asm_immediate_expected : Error<"constraint '%0' expects "
-    "an integer constant expression">;
   def err_asm_tying_incompatible_types : Error<
     "unsupported inline asm: input with type "
     "%diff{$ matching output with type $|}0,1">;
@@ -8062,16 +8092,17 @@ def warn_format_conversion_argument_type_mismatch : Warning<
   "%select{type|underlying type}2 %1">,
   InGroup<Format>;
 def warn_format_conversion_argument_type_mismatch_pedantic : Extension<
-  "format specifies type %0 but the argument has "
-  "%select{type|underlying type}2 %1">,
+  warn_format_conversion_argument_type_mismatch.Text>,
   InGroup<FormatPedantic>;
+def warn_format_conversion_argument_type_mismatch_confusion : Warning<
+  warn_format_conversion_argument_type_mismatch.Text>,
+  InGroup<FormatTypeConfusion>, DefaultIgnore;
 def warn_format_argument_needs_cast : Warning<
   "%select{values of type|enum values with underlying type}2 '%0' should not "
   "be used as format arguments; add an explicit cast to %1 instead">,
   InGroup<Format>;
 def warn_format_argument_needs_cast_pedantic : Warning<
-  "%select{values of type|enum values with underlying type}2 '%0' should not "
-  "be used as format arguments; add an explicit cast to %1 instead">,
+  warn_format_argument_needs_cast.Text>,
   InGroup<FormatPedantic>, DefaultIgnore;
 def warn_printf_positional_arg_exceeds_data_args : Warning <
   "data argument position '%0' exceeds the number of data arguments (%1)">,
@@ -9433,9 +9464,12 @@ def warn_omp_declare_target_after_first_use : Warning<
   InGroup<OpenMPTarget>;
 def err_omp_declare_variant_incompat_attributes : Error<
   "'#pragma omp declare variant' is not compatible with any target-specific attributes">;
-def err_omp_declare_variant_after_used : Error<
+def warn_omp_declare_variant_after_used : Warning<
   "'#pragma omp declare variant' cannot be applied for function after first "
-  "usage">;
+  "usage; the original function might be used">, InGroup<SourceUsesOpenMP>;
+def warn_omp_declare_variant_after_emitted : Warning<
+  "'#pragma omp declare variant' cannot be applied to the function that was defined already;"
+  " the original function might be used">, InGroup<SourceUsesOpenMP>;
 def err_omp_declare_variant_noproto : Error<
   "function with '#pragma omp declare variant' must have a prototype">;
 def note_omp_declare_variant_specified_here : Note<
@@ -9905,8 +9939,6 @@ def err_memtag_arg_must_be_pointer : Error<
   "%0 argument of MTE builtin function must be a pointer (%1 invalid)">;
 def err_memtag_arg_must_be_integer : Error<
   "%0 argument of MTE builtin function must be an integer type (%1 invalid)">;
-def err_memtag_arg_must_be_unsigned : Error<
-  "%0 argument  of MTE builtin function must be an unsigned integer type (%1 invalid)">;
 
 def warn_dereference_of_noderef_type : Warning<
   "dereferencing %0; was declared with a 'noderef' type">, InGroup<NoDeref>;

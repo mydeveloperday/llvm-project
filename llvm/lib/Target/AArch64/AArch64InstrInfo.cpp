@@ -929,7 +929,7 @@ bool AArch64InstrInfo::isCoalescableExtInstr(const MachineInstr &MI,
 }
 
 bool AArch64InstrInfo::areMemAccessesTriviallyDisjoint(
-    const MachineInstr &MIa, const MachineInstr &MIb, AliasAnalysis *AA) const {
+    const MachineInstr &MIa, const MachineInstr &MIb) const {
   const TargetRegisterInfo *TRI = &getRegisterInfo();
   const MachineOperand *BaseOpA = nullptr, *BaseOpB = nullptr;
   int64_t OffsetA = 0, OffsetB = 0;
@@ -3046,6 +3046,16 @@ static void emitFrameOffsetAdj(MachineBasicBlock &MBB,
     MaxEncoding = 0xfff;
     ShiftSize = 12;
     break;
+  case AArch64::ADDVL_XXI:
+  case AArch64::ADDPL_XXI:
+    MaxEncoding = 31;
+    ShiftSize = 0;
+    if (Offset < 0) {
+      MaxEncoding = 32;
+      Sign = -1;
+      Offset = -Offset;
+    }
+    break;
   default:
     llvm_unreachable("Unsupported opcode");
   }
@@ -3117,8 +3127,8 @@ void llvm::emitFrameOffset(MachineBasicBlock &MBB,
                            StackOffset Offset, const TargetInstrInfo *TII,
                            MachineInstr::MIFlag Flag, bool SetNZCV,
                            bool NeedsWinCFI, bool *HasWinCFI) {
-  int64_t Bytes;
-  Offset.getForFrameOffset(Bytes);
+  int64_t Bytes, NumPredicateVectors, NumDataVectors;
+  Offset.getForFrameOffset(Bytes, NumPredicateVectors, NumDataVectors);
 
   // First emit non-scalable frame offsets, or a simple 'mov'.
   if (Bytes || (!Offset && SrcReg != DestReg)) {
@@ -3132,6 +3142,23 @@ void llvm::emitFrameOffset(MachineBasicBlock &MBB,
     emitFrameOffsetAdj(MBB, MBBI, DL, DestReg, SrcReg, Bytes, Opc, TII, Flag,
                        NeedsWinCFI, HasWinCFI);
     SrcReg = DestReg;
+  }
+
+  assert(!(SetNZCV && (NumPredicateVectors || NumDataVectors)) &&
+         "SetNZCV not supported with SVE vectors");
+  assert(!(NeedsWinCFI && (NumPredicateVectors || NumDataVectors)) &&
+         "WinCFI not supported with SVE vectors");
+
+  if (NumDataVectors) {
+    emitFrameOffsetAdj(MBB, MBBI, DL, DestReg, SrcReg, NumDataVectors,
+                       AArch64::ADDVL_XXI, TII, Flag, NeedsWinCFI, nullptr);
+    SrcReg = DestReg;
+  }
+
+  if (NumPredicateVectors) {
+    assert(DestReg != AArch64::SP && "Unaligned access to SP");
+    emitFrameOffsetAdj(MBB, MBBI, DL, DestReg, SrcReg, NumPredicateVectors,
+                       AArch64::ADDPL_XXI, TII, Flag, NeedsWinCFI, nullptr);
   }
 }
 

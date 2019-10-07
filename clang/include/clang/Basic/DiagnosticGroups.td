@@ -499,6 +499,7 @@ def StringCompare : DiagGroup<"string-compare">;
 def StringPlusInt : DiagGroup<"string-plus-int">;
 def StringPlusChar : DiagGroup<"string-plus-char">;
 def StrncatSize : DiagGroup<"strncat-size">;
+def IntInBoolContext : DiagGroup<"int-in-bool-context">;
 def TautologicalTypeLimitCompare : DiagGroup<"tautological-type-limit-compare">;
 def TautologicalUnsignedZeroCompare : DiagGroup<"tautological-unsigned-zero-compare">;
 def TautologicalUnsignedEnumZeroCompare : DiagGroup<"tautological-unsigned-enum-zero-compare">;
@@ -562,6 +563,7 @@ def CoveredSwitchDefault : DiagGroup<"covered-switch-default">;
 def SwitchBool     : DiagGroup<"switch-bool">;
 def SwitchEnum     : DiagGroup<"switch-enum">;
 def Switch         : DiagGroup<"switch">;
+def EnumCompareConditional : DiagGroup<"enum-compare-conditional">;
 def EnumCompareSwitch : DiagGroup<"enum-compare-switch">;
 def EnumCompare       : DiagGroup<"enum-compare", [EnumCompareSwitch]>;
 def ImplicitFallthroughPerFunction :
@@ -778,6 +780,7 @@ def FormatSecurity : DiagGroup<"format-security">;
 def FormatNonStandard : DiagGroup<"format-non-iso">;
 def FormatY2K : DiagGroup<"format-y2k">;
 def FormatPedantic : DiagGroup<"format-pedantic">;
+def FormatTypeConfusion : DiagGroup<"format-type-confusion">;
 def Format : DiagGroup<"format",
                        [FormatExtraArgs, FormatZeroLength, NonNull,
                         FormatSecurity, FormatY2K, FormatInvalidSpecifier]>,
@@ -821,6 +824,7 @@ def Most : DiagGroup<"most", [
     Format,
     Implicit,
     InfiniteRecursion,
+    IntInBoolContext,
     MismatchedTags,
     MissingBraces,
     Move,

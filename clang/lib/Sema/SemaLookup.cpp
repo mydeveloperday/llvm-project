@@ -764,6 +764,13 @@ static void InsertOCLBuiltinDeclarationsFromTable(Sema &S, LookupResult &LR,
         BuiltinTable[FctIndex + SignatureIndex];
     ASTContext &Context = S.Context;
 
+    // Ignore this BIF if its version does not match the language options.
+    if (Context.getLangOpts().OpenCLVersion < OpenCLBuiltin.MinVersion)
+      continue;
+    if ((OpenCLBuiltin.MaxVersion != 0) &&
+        (Context.getLangOpts().OpenCLVersion >= OpenCLBuiltin.MaxVersion))
+      continue;
+
     SmallVector<QualType, 1> RetTypes;
     SmallVector<SmallVector<QualType, 1>, 5> ArgTypes;
 
@@ -2123,7 +2130,7 @@ static bool LookupQualifiedNameInUsingDirectives(Sema &S, LookupResult &R,
 /// Callback that looks for any member of a class with the given name.
 static bool LookupAnyMember(const CXXBaseSpecifier *Specifier,
                             CXXBasePath &Path, DeclarationName Name) {
-  RecordDecl *BaseRecord = Specifier->getType()->getAs<RecordType>()->getDecl();
+  RecordDecl *BaseRecord = Specifier->getType()->castAs<RecordType>()->getDecl();
 
   Path.Decls = BaseRecord->lookup(Name);
   return !Path.Decls.empty();
@@ -2822,7 +2829,7 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result, QualType Ty) {
 #define NON_CANONICAL_TYPE(Class, Base) case Type::Class:
 #define NON_CANONICAL_UNLESS_DEPENDENT_TYPE(Class, Base) case Type::Class:
 #define ABSTRACT_TYPE(Class, Base)
-#include "clang/AST/TypeNodes.def"
+#include "clang/AST/TypeNodes.inc"
       // T is canonical.  We can also ignore dependent types because
       // we don't need to do ADL at the definition point, but if we
       // wanted to implement template export (or if we find some other

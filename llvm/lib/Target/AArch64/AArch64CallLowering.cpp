@@ -368,6 +368,49 @@ bool AArch64CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
   return Success;
 }
 
+/// Helper function to compute forwarded registers for musttail calls. Computes
+/// the forwarded registers, sets MBB liveness, and emits COPY instructions that
+/// can be used to save + restore registers later.
+static void handleMustTailForwardedRegisters(MachineIRBuilder &MIRBuilder,
+                                             CCAssignFn *AssignFn) {
+  MachineBasicBlock &MBB = MIRBuilder.getMBB();
+  MachineFunction &MF = MIRBuilder.getMF();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+
+  if (!MFI.hasMustTailInVarArgFunc())
+    return;
+
+  AArch64FunctionInfo *FuncInfo = MF.getInfo<AArch64FunctionInfo>();
+  const Function &F = MF.getFunction();
+  assert(F.isVarArg() && "Expected F to be vararg?");
+
+  // Compute the set of forwarded registers. The rest are scratch.
+  SmallVector<CCValAssign, 16> ArgLocs;
+  CCState CCInfo(F.getCallingConv(), /*IsVarArg=*/true, MF, ArgLocs,
+                 F.getContext());
+  SmallVector<MVT, 2> RegParmTypes;
+  RegParmTypes.push_back(MVT::i64);
+  RegParmTypes.push_back(MVT::f128);
+
+  // Later on, we can use this vector to restore the registers if necessary.
+  SmallVectorImpl<ForwardedRegister> &Forwards =
+      FuncInfo->getForwardedMustTailRegParms();
+  CCInfo.analyzeMustTailForwardedRegisters(Forwards, RegParmTypes, AssignFn);
+
+  // Conservatively forward X8, since it might be used for an aggregate
+  // return.
+  if (!CCInfo.isAllocated(AArch64::X8)) {
+    unsigned X8VReg = MF.addLiveIn(AArch64::X8, &AArch64::GPR64RegClass);
+    Forwards.push_back(ForwardedRegister(X8VReg, AArch64::X8, MVT::i64));
+  }
+
+  // Add the forwards to the MachineBasicBlock and MachineFunction.
+  for (const auto &F : Forwards) {
+    MBB.addLiveIn(F.PReg);
+    MIRBuilder.buildCopy(Register(F.VReg), Register(F.PReg));
+  }
+}
+
 bool AArch64CallLowering::lowerFormalArguments(
     MachineIRBuilder &MIRBuilder, const Function &F,
     ArrayRef<ArrayRef<Register>> VRegs) const {
@@ -441,6 +484,8 @@ bool AArch64CallLowering::lowerFormalArguments(
   if (Subtarget.hasCustomCallingConv())
     Subtarget.getRegisterInfo()->UpdateCustomCalleeSavedRegs(MF);
 
+  handleMustTailForwardedRegisters(MIRBuilder, AssignFn);
+
   // Move back to the end of the basic block.
   MIRBuilder.setMBB(MBB);
 
@@ -464,6 +509,13 @@ static bool mayTailCallThisCC(CallingConv::ID CC) {
   }
 }
 
+/// Returns a pair containing the fixed CCAssignFn and the vararg CCAssignFn for
+/// CC.
+static std::pair<CCAssignFn *, CCAssignFn *>
+getAssignFnsForCC(CallingConv::ID CC, const AArch64TargetLowering &TLI) {
+  return {TLI.CCAssignFnForCall(CC, false), TLI.CCAssignFnForCall(CC, true)};
+}
+
 bool AArch64CallLowering::doCallerAndCalleePassArgsTheSameWay(
     CallLoweringInfo &Info, MachineFunction &MF,
     SmallVectorImpl<ArgInfo> &InArgs) const {
@@ -477,11 +529,19 @@ bool AArch64CallLowering::doCallerAndCalleePassArgsTheSameWay(
 
   // Check if the caller and callee will handle arguments in the same way.
   const AArch64TargetLowering &TLI = *getTLI<AArch64TargetLowering>();
-  CCAssignFn *CalleeAssignFn = TLI.CCAssignFnForCall(CalleeCC, Info.IsVarArg);
-  CCAssignFn *CallerAssignFn =
-      TLI.CCAssignFnForCall(CallerCC, CallerF.isVarArg());
+  CCAssignFn *CalleeAssignFnFixed;
+  CCAssignFn *CalleeAssignFnVarArg;
+  std::tie(CalleeAssignFnFixed, CalleeAssignFnVarArg) =
+      getAssignFnsForCC(CalleeCC, TLI);
 
-  if (!resultsCompatible(Info, MF, InArgs, *CalleeAssignFn, *CallerAssignFn))
+  CCAssignFn *CallerAssignFnFixed;
+  CCAssignFn *CallerAssignFnVarArg;
+  std::tie(CallerAssignFnFixed, CallerAssignFnVarArg) =
+      getAssignFnsForCC(CallerCC, TLI);
+
+  if (!resultsCompatible(Info, MF, InArgs, *CalleeAssignFnFixed,
+                         *CalleeAssignFnVarArg, *CallerAssignFnFixed,
+                         *CallerAssignFnVarArg))
     return false;
 
   // Make sure that the caller and callee preserve all of the same registers.
@@ -508,12 +568,15 @@ bool AArch64CallLowering::areCalleeOutgoingArgsTailCallable(
   CallingConv::ID CallerCC = CallerF.getCallingConv();
   const AArch64TargetLowering &TLI = *getTLI<AArch64TargetLowering>();
 
+  CCAssignFn *AssignFnFixed;
+  CCAssignFn *AssignFnVarArg;
+  std::tie(AssignFnFixed, AssignFnVarArg) = getAssignFnsForCC(CalleeCC, TLI);
+
   // We have outgoing arguments. Make sure that we can tail call with them.
   SmallVector<CCValAssign, 16> OutLocs;
   CCState OutInfo(CalleeCC, false, MF, OutLocs, CallerF.getContext());
 
-  if (!analyzeArgInfo(OutInfo, OutArgs,
-                      *TLI.CCAssignFnForCall(CalleeCC, Info.IsVarArg))) {
+  if (!analyzeArgInfo(OutInfo, OutArgs, *AssignFnFixed, *AssignFnVarArg)) {
     LLVM_DEBUG(dbgs() << "... Could not analyze call operands.\n");
     return false;
   }
@@ -596,6 +659,11 @@ bool AArch64CallLowering::isEligibleForTailCallOptimization(
     MachineIRBuilder &MIRBuilder, CallLoweringInfo &Info,
     SmallVectorImpl<ArgInfo> &InArgs,
     SmallVectorImpl<ArgInfo> &OutArgs) const {
+
+  // Must pass all target-independent checks in order to tail call optimize.
+  if (!Info.IsTailCall)
+    return false;
+
   CallingConv::ID CalleeCC = Info.CallConv;
   MachineFunction &MF = MIRBuilder.getMF();
   const Function &CallerF = MF.getFunction();
@@ -672,12 +740,6 @@ bool AArch64CallLowering::isEligibleForTailCallOptimization(
   assert((!Info.IsVarArg || CalleeCC == CallingConv::C) &&
          "Unexpected variadic calling convention");
 
-  // Before we can musttail varargs, we need to forward parameters like in
-  // r345641. Make sure that we don't enable musttail with varargs without
-  // addressing that!
-  assert(!(Info.IsVarArg && Info.IsMustTailCall) &&
-         "musttail support for varargs not implemented yet!");
-
   // Verify that the incoming and outgoing arguments from the callee are
   // safe to tail call.
   if (!doCallerAndCalleePassArgsTheSameWay(Info, MF, InArgs)) {
@@ -718,6 +780,7 @@ bool AArch64CallLowering::lowerTailCall(
   const Function &F = MF.getFunction();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const AArch64TargetLowering &TLI = *getTLI<AArch64TargetLowering>();
+  AArch64FunctionInfo *FuncInfo = MF.getInfo<AArch64FunctionInfo>();
 
   // True when we're tail calling, but without -tailcallopt.
   bool IsSibCall = !MF.getTarget().Options.GuaranteedTailCallOpt;
@@ -732,10 +795,9 @@ bool AArch64CallLowering::lowerTailCall(
 
   // Find out which ABI gets to decide where things go.
   CallingConv::ID CalleeCC = Info.CallConv;
-  CCAssignFn *AssignFnFixed =
-      TLI.CCAssignFnForCall(CalleeCC, /*IsVarArg=*/false);
-  CCAssignFn *AssignFnVarArg =
-      TLI.CCAssignFnForCall(CalleeCC, /*IsVarArg=*/true);
+  CCAssignFn *AssignFnFixed;
+  CCAssignFn *AssignFnVarArg;
+  std::tie(AssignFnFixed, AssignFnVarArg) = getAssignFnsForCC(CalleeCC, TLI);
 
   MachineInstrBuilder CallSeqStart;
   if (!IsSibCall)
@@ -774,12 +836,10 @@ bool AArch64CallLowering::lowerTailCall(
     // We aren't sibcalling, so we need to compute FPDiff. We need to do this
     // before handling assignments, because FPDiff must be known for memory
     // arguments.
-    AArch64FunctionInfo *FuncInfo = MF.getInfo<AArch64FunctionInfo>();
     unsigned NumReusableBytes = FuncInfo->getBytesInStackArgArea();
     SmallVector<CCValAssign, 16> OutLocs;
     CCState OutInfo(CalleeCC, false, MF, OutLocs, F.getContext());
-    analyzeArgInfo(OutInfo, OutArgs,
-                   *TLI.CCAssignFnForCall(CalleeCC, Info.IsVarArg));
+    analyzeArgInfo(OutInfo, OutArgs, *AssignFnFixed, *AssignFnVarArg);
 
     // The callee will pop the argument stack as a tail call. Thus, we must
     // keep it 16-byte aligned.
@@ -798,12 +858,35 @@ bool AArch64CallLowering::lowerTailCall(
     assert(FPDiff % 16 == 0 && "unaligned stack on tail call");
   }
 
+  const auto &Forwards = FuncInfo->getForwardedMustTailRegParms();
+
   // Do the actual argument marshalling.
   SmallVector<unsigned, 8> PhysRegs;
   OutgoingArgHandler Handler(MIRBuilder, MRI, MIB, AssignFnFixed,
                              AssignFnVarArg, true, FPDiff);
   if (!handleAssignments(MIRBuilder, OutArgs, Handler))
     return false;
+
+  if (Info.IsVarArg && Info.IsMustTailCall) {
+    // Now we know what's being passed to the function. Add uses to the call for
+    // the forwarded registers that we *aren't* passing as parameters. This will
+    // preserve the copies we build earlier.
+    for (const auto &F : Forwards) {
+      Register ForwardedReg = F.PReg;
+      // If the register is already passed, or aliases a register which is
+      // already being passed, then skip it.
+      if (any_of(MIB->uses(), [&ForwardedReg, &TRI](const MachineOperand &Use) {
+            if (!Use.isReg())
+              return false;
+            return TRI->regsOverlap(Use.getReg(), ForwardedReg);
+          }))
+        continue;
+
+      // We aren't passing it already, so we should add it to the call.
+      MIRBuilder.buildCopy(ForwardedReg, Register(F.VReg));
+      MIB.addReg(ForwardedReg, RegState::Implicit);
+    }
+  }
 
   // If we have -tailcallopt, we need to adjust the stack. We'll do the call
   // sequence start and end here.
@@ -841,12 +924,6 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   auto &DL = F.getParent()->getDataLayout();
   const AArch64TargetLowering &TLI = *getTLI<AArch64TargetLowering>();
 
-  if (Info.IsMustTailCall) {
-    // TODO: Until we lower all tail calls, we should fall back on this.
-    LLVM_DEBUG(dbgs() << "Cannot lower musttail calls yet.\n");
-    return false;
-  }
-
   SmallVector<ArgInfo, 8> OutArgs;
   for (auto &OrigArg : Info.OrigArgs) {
     splitToValueTypes(OrigArg, OutArgs, DL, MRI, Info.CallConv);
@@ -860,15 +937,26 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
     splitToValueTypes(Info.OrigRet, InArgs, DL, MRI, F.getCallingConv());
 
   // If we can lower as a tail call, do that instead.
-  if (Info.IsTailCall &&
-      isEligibleForTailCallOptimization(MIRBuilder, Info, InArgs, OutArgs))
+  bool CanTailCallOpt =
+      isEligibleForTailCallOptimization(MIRBuilder, Info, InArgs, OutArgs);
+
+  // We must emit a tail call if we have musttail.
+  if (Info.IsMustTailCall && !CanTailCallOpt) {
+    // There are types of incoming/outgoing arguments we can't handle yet, so
+    // it doesn't make sense to actually die here like in ISelLowering. Instead,
+    // fall back to SelectionDAG and let it try to handle this.
+    LLVM_DEBUG(dbgs() << "Failed to lower musttail call as tail call\n");
+    return false;
+  }
+
+  if (CanTailCallOpt)
     return lowerTailCall(MIRBuilder, Info, OutArgs);
 
   // Find out which ABI gets to decide where things go.
-  CCAssignFn *AssignFnFixed =
-      TLI.CCAssignFnForCall(Info.CallConv, /*IsVarArg=*/false);
-  CCAssignFn *AssignFnVarArg =
-      TLI.CCAssignFnForCall(Info.CallConv, /*IsVarArg=*/true);
+  CCAssignFn *AssignFnFixed;
+  CCAssignFn *AssignFnVarArg;
+  std::tie(AssignFnFixed, AssignFnVarArg) =
+      getAssignFnsForCC(Info.CallConv, TLI);
 
   MachineInstrBuilder CallSeqStart;
   CallSeqStart = MIRBuilder.buildInstr(AArch64::ADJCALLSTACKDOWN);

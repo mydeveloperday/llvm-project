@@ -1384,6 +1384,29 @@ Instruction *InstCombiner::foldIRemByPowerOfTwoToBitTest(ICmpInst &I) {
   return ICmpInst::Create(Instruction::ICmp, Pred, Masked, Zero);
 }
 
+/// Fold equality-comparison between zero and any (maybe truncated) right-shift
+/// by one-less-than-bitwidth into a sign test on the original value.
+Instruction *foldSignBitTest(ICmpInst &I) {
+  ICmpInst::Predicate Pred;
+  Value *X;
+  Constant *C;
+  if (!I.isEquality() ||
+      !match(&I, m_ICmp(Pred, m_TruncOrSelf(m_Shr(m_Value(X), m_Constant(C))),
+                        m_Zero())))
+    return nullptr;
+
+  Type *XTy = X->getType();
+  unsigned XBitWidth = XTy->getScalarSizeInBits();
+  if (!match(C, m_SpecificInt_ICMP(ICmpInst::Predicate::ICMP_EQ,
+                                   APInt(XBitWidth, XBitWidth - 1))))
+    return nullptr;
+
+  return ICmpInst::Create(Instruction::ICmp,
+                          Pred == ICmpInst::ICMP_EQ ? ICmpInst::ICMP_SGE
+                                                    : ICmpInst::ICMP_SLT,
+                          X, ConstantInt::getNullValue(XTy));
+}
+
 // Handle  icmp pred X, 0
 Instruction *InstCombiner::foldICmpWithZero(ICmpInst &Cmp) {
   CmpInst::Predicate Pred = Cmp.getPredicate();
@@ -3638,7 +3661,8 @@ Value *InstCombiner::foldUnsignedMultiplicationOverflowCheck(ICmpInst &I) {
 /// TODO: A large part of this logic is duplicated in InstSimplify's
 /// simplifyICmpWithBinOp(). We should be able to share that and avoid the code
 /// duplication.
-Instruction *InstCombiner::foldICmpBinOp(ICmpInst &I) {
+Instruction *InstCombiner::foldICmpBinOp(ICmpInst &I, const SimplifyQuery &SQ) {
+  const SimplifyQuery Q = SQ.getWithInstruction(&I);
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
   // Special logic for binary operators.
@@ -3840,6 +3864,14 @@ Instruction *InstCombiner::foldICmpBinOp(ICmpInst &I) {
   // C u</u>= (C - D) --> C u</u>= D
   if (C == Op0 && (Pred == ICmpInst::ICMP_ULT || Pred == ICmpInst::ICMP_UGE))
     return new ICmpInst(Pred, C, D);
+  // (A - B) u>=/u< A --> B u>/u<= A  iff B != 0
+  if (A == Op1 && (Pred == ICmpInst::ICMP_UGE || Pred == ICmpInst::ICMP_ULT) &&
+      isKnownNonZero(B, Q.DL, /*Depth=*/0, Q.AC, Q.CxtI, Q.DT))
+    return new ICmpInst(CmpInst::getFlippedStrictnessPredicate(Pred), B, A);
+  // C u<=/u> (C - D) --> C u</u>= D  iff B != 0
+  if (C == Op0 && (Pred == ICmpInst::ICMP_ULE || Pred == ICmpInst::ICMP_UGT) &&
+      isKnownNonZero(D, Q.DL, /*Depth=*/0, Q.AC, Q.CxtI, Q.DT))
+    return new ICmpInst(CmpInst::getFlippedStrictnessPredicate(Pred), C, D);
 
   // icmp (A-B), (C-B) -> icmp A, C for equalities or if there is no overflow.
   if (B && D && B == D && NoOp0WrapProblem && NoOp1WrapProblem)
@@ -5132,16 +5164,11 @@ llvm::getFlippedStrictnessPredicateAndConstant(CmpInst::Predicate Pred,
     return WillIncrement ? !C->isMaxValue(IsSigned) : !C->isMinValue(IsSigned);
   };
 
-  // For scalars, SimplifyICmpInst should have already handled
-  // the edge cases for us, so we just assert on them.
-  // For vectors, we must handle the edge cases.
-  if (isa<ConstantInt>(C)) {
-    // A <= MAX -> TRUE ; A >= MIN -> TRUE
-    assert(ConstantIsOk(cast<ConstantInt>(C)));
+  if (auto *CI = dyn_cast<ConstantInt>(C)) {
+    // Bail out if the constant can't be safely incremented/decremented.
+    if (!ConstantIsOk(CI))
+      return llvm::None;
   } else if (Type->isVectorTy()) {
-    // TODO? If the edge cases for vectors were guaranteed to be handled as they
-    // are for scalar, we could remove the min/max checks. However, to do that,
-    // we would have to use insertelement/shufflevector to replace edge values.
     unsigned NumElts = Type->getVectorNumElements();
     for (unsigned i = 0; i != NumElts; ++i) {
       Constant *Elt = C->getAggregateElement(i);
@@ -5346,6 +5373,7 @@ static Instruction *foldVectorCmp(CmpInst &Cmp,
 
 Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
   bool Changed = false;
+  const SimplifyQuery Q = SQ.getWithInstruction(&I);
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
   unsigned Op0Cplxity = getComplexity(Op0);
   unsigned Op1Cplxity = getComplexity(Op1);
@@ -5360,8 +5388,7 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
     Changed = true;
   }
 
-  if (Value *V = SimplifyICmpInst(I.getPredicate(), Op0, Op1,
-                                  SQ.getWithInstruction(&I)))
+  if (Value *V = SimplifyICmpInst(I.getPredicate(), Op0, Op1, Q))
     return replaceInstUsesWith(I, V);
 
   // Comparing -val or val with non-zero is the same as just comparing val
@@ -5392,6 +5419,9 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
     return Res;
 
   if (Instruction *Res = foldICmpWithDominatingICmp(I))
+    return Res;
+
+  if (Instruction *Res = foldICmpBinOp(I, Q))
     return Res;
 
   if (Instruction *Res = foldICmpUsingKnownBits(I))
@@ -5442,6 +5472,11 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
   if (Instruction *Res = foldICmpInstWithConstant(I))
     return Res;
 
+  // Try to match comparison as a sign bit test. Intentionally do this after
+  // foldICmpInstWithConstant() to potentially let other folds to happen first.
+  if (Instruction *New = foldSignBitTest(I))
+    return New;
+
   if (Instruction *Res = foldICmpInstWithConstantNotInt(I))
     return Res;
 
@@ -5470,9 +5505,6 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
 
   if (Instruction *R = foldICmpWithCastOp(I))
     return R;
-
-  if (Instruction *Res = foldICmpBinOp(I))
-    return Res;
 
   if (Instruction *Res = foldICmpWithMinMax(I))
     return Res;

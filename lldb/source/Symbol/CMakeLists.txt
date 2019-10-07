@@ -48,9 +48,6 @@ add_lldb_library(lldbSymbol
   ${PLATFORM_SOURCES}
 
   LINK_LIBS
-    clangAST
-    clangBasic
-    clangFrontend
     lldbCore
     lldbExpression
     lldbHost
@@ -61,6 +58,11 @@ add_lldb_library(lldbSymbol
     lldbPluginSymbolFilePDB
     lldbPluginObjCLanguage
     lldbPluginObjCRuntime
+
+  CLANG_LIBS
+    clangAST
+    clangBasic
+    clangFrontend
 
   LINK_COMPONENTS
     Support

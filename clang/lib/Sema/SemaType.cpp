@@ -1955,12 +1955,24 @@ static bool checkQualifiedFunction(Sema &S, QualType T, SourceLocation Loc,
                                    QualifiedFunctionKind QFK) {
   // Does T refer to a function type with a cv-qualifier or a ref-qualifier?
   const FunctionProtoType *FPT = T->getAs<FunctionProtoType>();
-  if (!FPT || (FPT->getMethodQuals().empty() && FPT->getRefQualifier() == RQ_None))
+  if (!FPT ||
+      (FPT->getMethodQuals().empty() && FPT->getRefQualifier() == RQ_None))
     return false;
 
   S.Diag(Loc, diag::err_compound_qualified_function_type)
     << QFK << isa<FunctionType>(T.IgnoreParens()) << T
     << getFunctionQualifiersAsString(FPT);
+  return true;
+}
+
+bool Sema::CheckQualifiedFunctionForTypeId(QualType T, SourceLocation Loc) {
+  const FunctionProtoType *FPT = T->getAs<FunctionProtoType>();
+  if (!FPT ||
+      (FPT->getMethodQuals().empty() && FPT->getRefQualifier() == RQ_None))
+    return false;
+
+  Diag(Loc, diag::err_qualified_function_typeid)
+      << T << getFunctionQualifiersAsString(FPT);
   return true;
 }
 
@@ -2278,7 +2290,7 @@ QualType Sema::BuildArrayType(QualType T, ArrayType::ArraySizeModifier ASM,
       }
     }
 
-    T = Context.getConstantArrayType(T, ConstVal, ASM, Quals);
+    T = Context.getConstantArrayType(T, ConstVal, ArraySize, ASM, Quals);
   }
 
   // OpenCL v1.2 s6.9.d: variable length arrays are not supported.
@@ -8208,20 +8220,28 @@ bool Sema::RequireLiteralType(SourceLocation Loc, QualType T,
         return true;
       }
     }
-  } else if (!RD->hasTrivialDestructor()) {
-    // All fields and bases are of literal types, so have trivial destructors.
-    // If this class's destructor is non-trivial it must be user-declared.
+  } else if (getLangOpts().CPlusPlus2a ? !RD->hasConstexprDestructor()
+                                       : !RD->hasTrivialDestructor()) {
+    // All fields and bases are of literal types, so have trivial or constexpr
+    // destructors. If this class's destructor is non-trivial / non-constexpr,
+    // it must be user-declared.
     CXXDestructorDecl *Dtor = RD->getDestructor();
     assert(Dtor && "class has literal fields and bases but no dtor?");
     if (!Dtor)
       return true;
 
-    Diag(Dtor->getLocation(), Dtor->isUserProvided() ?
-         diag::note_non_literal_user_provided_dtor :
-         diag::note_non_literal_nontrivial_dtor) << RD;
-    if (!Dtor->isUserProvided())
-      SpecialMemberIsTrivial(Dtor, CXXDestructor, TAH_IgnoreTrivialABI,
-                             /*Diagnose*/true);
+    if (getLangOpts().CPlusPlus2a) {
+      Diag(Dtor->getLocation(), diag::note_non_literal_non_constexpr_dtor)
+          << RD;
+    } else {
+      Diag(Dtor->getLocation(), Dtor->isUserProvided()
+                                    ? diag::note_non_literal_user_provided_dtor
+                                    : diag::note_non_literal_nontrivial_dtor)
+          << RD;
+      if (!Dtor->isUserProvided())
+        SpecialMemberIsTrivial(Dtor, CXXDestructor, TAH_IgnoreTrivialABI,
+                               /*Diagnose*/ true);
+    }
   }
 
   return true;

@@ -859,7 +859,7 @@ benefits:
 
 There are unfortunately exceptions to this general approach, such as:
 
-  * A the first declaration of a redeclarable entity maintains a pointer to the
+  * The first declaration of a redeclarable entity maintains a pointer to the
     most recent declaration of that entity, which naturally needs to change as
     more declarations are parsed.
   * Name lookup tables in declaration contexts change after the namespace
@@ -1519,11 +1519,11 @@ statements are true:
 - A and X are nodes from the same ASTContext.
 - B and Y are nodes from the same ASTContext.
 - A and B may or may not be from the same ASTContext.
-- if A == X (pointer equivalency) then (there is a cycle during the traverse)
+- if A == X and B == Y (pointer equivalency) then (there is a cycle during the
+  traverse)
 
   - A and B are structurally equivalent if and only if
 
-    - B and Y are part of the same redeclaration chain,
     - All dependent nodes on the path from <A,B> to <X,Y> are structurally
       equivalent.
 
@@ -1562,15 +1562,6 @@ the whole redeclaration chain of the function. The most recent version of the
 ``ASTImporter`` uses the latter mechanism. We do import all function
 declarations - regardless if they are definitions or prototypes - in the order
 as they appear in the "from" context.
-
-.. Structural eq requires proper redecl chains
-
-Another reason why we must maintain and import redeclaration chains properly is
-that the :ref:`Structural Equivalency <structural-eq>` check would report false
-positive in-equivalencies otherwise. We must not allow having two (or more)
-independent redeclaration chains of structurally equivalent declarations.
-Structural equivalency identifies the chains with the canonical declaration,
-that becomes different for independent chains.
 
 .. One definition
 
@@ -1913,7 +1904,7 @@ declarations like enums, classes, etc. if they are in anonymous namespaces.
 Therefore, we filter the lookup results and consider only those which have the
 same visibility as the declaration we currently import.
 
-We consider two declarations in two anonymous namsepaces to have the same
+We consider two declarations in two anonymous namespaces to have the same
 visibility only if they are imported from the same AST context.
 
 Strategies to Handle Conflicting Names
@@ -2134,7 +2125,7 @@ about them.
 
 Finally, this is not just a problem for semantic analysis.  The code generator
 and other clients have to be able to fold constants (e.g., to initialize global
-variables) and has to handle a superset of what C99 allows.  Further, these
+variables) and have to handle a superset of what C99 allows.  Further, these
 clients can benefit from extended information.  For example, we know that
 "``foo() || 1``" always evaluates to ``true``, but we can't replace the
 expression with ``true`` because it has side effects.
