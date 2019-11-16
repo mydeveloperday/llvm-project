@@ -1536,8 +1536,14 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
           return ExprError();
         break;
       case llvm::Triple::aarch64:
+      case llvm::Triple::aarch64_32:
       case llvm::Triple::aarch64_be:
         if (CheckAArch64BuiltinFunctionCall(BuiltinID, TheCall))
+          return ExprError();
+        break;
+      case llvm::Triple::bpfeb:
+      case llvm::Triple::bpfel:
+        if (CheckBPFBuiltinFunctionCall(BuiltinID, TheCall))
           return ExprError();
         break;
       case llvm::Triple::hexagon:
@@ -1680,6 +1686,7 @@ bool Sema::CheckNeonBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
 
     llvm::Triple::ArchType Arch = Context.getTargetInfo().getTriple().getArch();
     bool IsPolyUnsigned = Arch == llvm::Triple::aarch64 ||
+                          Arch == llvm::Triple::aarch64_32 ||
                           Arch == llvm::Triple::aarch64_be;
     bool IsInt64Long =
         Context.getTargetInfo().getInt64Type() == TargetInfo::SignedLong;
@@ -1710,6 +1717,14 @@ bool Sema::CheckNeonBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   }
 
   return SemaBuiltinConstantArgRange(TheCall, i, l, u + l);
+}
+
+bool Sema::CheckMVEBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
+  switch (BuiltinID) {
+  default:
+    return false;
+  #include "clang/Basic/arm_mve_builtin_sema.inc"
+  }
 }
 
 bool Sema::CheckARMBuiltinExclusiveCall(unsigned BuiltinID, CallExpr *TheCall,
@@ -1852,6 +1867,8 @@ bool Sema::CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
 
   if (CheckNeonBuiltinFunctionCall(BuiltinID, TheCall))
     return true;
+  if (CheckMVEBuiltinFunctionCall(BuiltinID, TheCall))
+    return true;
 
   // For intrinsics which take an immediate value as part of the instruction,
   // range check them here.
@@ -1938,6 +1955,40 @@ bool Sema::CheckAArch64BuiltinFunctionCall(unsigned BuiltinID,
   }
 
   return SemaBuiltinConstantArgRange(TheCall, i, l, u + l);
+}
+
+bool Sema::CheckBPFBuiltinFunctionCall(unsigned BuiltinID,
+                                       CallExpr *TheCall) {
+  assert(BuiltinID == BPF::BI__builtin_preserve_field_info &&
+         "unexpected ARM builtin");
+
+  if (checkArgCount(*this, TheCall, 2))
+    return true;
+
+  // The first argument needs to be a record field access.
+  // If it is an array element access, we delay decision
+  // to BPF backend to check whether the access is a
+  // field access or not.
+  Expr *Arg = TheCall->getArg(0);
+  if (Arg->getType()->getAsPlaceholderType() ||
+      (Arg->IgnoreParens()->getObjectKind() != OK_BitField &&
+       !dyn_cast<MemberExpr>(Arg->IgnoreParens()) &&
+       !dyn_cast<ArraySubscriptExpr>(Arg->IgnoreParens()))) {
+    Diag(Arg->getBeginLoc(), diag::err_preserve_field_info_not_field)
+        << 1 << Arg->getSourceRange();
+    return true;
+  }
+
+  // The second argument needs to be a constant int
+  llvm::APSInt Value;
+  if (!TheCall->getArg(1)->isIntegerConstantExpr(Value, Context)) {
+    Diag(Arg->getBeginLoc(), diag::err_preserve_field_info_not_const)
+        << 2 << Arg->getSourceRange();
+    return true;
+  }
+
+  TheCall->setType(Context.UnsignedIntTy);
+  return false;
 }
 
 bool Sema::CheckHexagonBuiltinCpu(unsigned BuiltinID, CallExpr *TheCall) {
@@ -5467,7 +5518,8 @@ ExprResult Sema::CheckOSLogFormatStringArg(Expr *Arg) {
 static bool checkVAStartABI(Sema &S, unsigned BuiltinID, Expr *Fn) {
   const llvm::Triple &TT = S.Context.getTargetInfo().getTriple();
   bool IsX64 = TT.getArch() == llvm::Triple::x86_64;
-  bool IsAArch64 = TT.getArch() == llvm::Triple::aarch64;
+  bool IsAArch64 = (TT.getArch() == llvm::Triple::aarch64 ||
+                    TT.getArch() == llvm::Triple::aarch64_32);
   bool IsWindows = TT.isOSWindows();
   bool IsMSVAStart = BuiltinID == Builtin::BI__builtin_ms_va_start;
   if (IsX64 || IsAArch64) {
@@ -6024,6 +6076,12 @@ bool Sema::SemaBuiltinAssumeAligned(CallExpr *TheCall) {
     if (!Result.isPowerOf2())
       return Diag(TheCall->getBeginLoc(), diag::err_alignment_not_power_of_two)
              << Arg->getSourceRange();
+
+    // Alignment calculations can wrap around if it's greater than 2**29.
+    unsigned MaximumAlignment = 536870912;
+    if (Result > MaximumAlignment)
+      Diag(TheCall->getBeginLoc(), diag::warn_assume_aligned_too_great)
+          << Arg->getSourceRange() << MaximumAlignment;
   }
 
   if (NumArgs > 2) {
@@ -6188,6 +6246,101 @@ bool Sema::SemaBuiltinConstantArgMultiple(CallExpr *TheCall, int ArgNum,
            << Num << Arg->getSourceRange();
 
   return false;
+}
+
+/// SemaBuiltinConstantArgPower2 - Check if argument ArgNum of TheCall is a
+/// constant expression representing a power of 2.
+bool Sema::SemaBuiltinConstantArgPower2(CallExpr *TheCall, int ArgNum) {
+  llvm::APSInt Result;
+
+  // We can't check the value of a dependent argument.
+  Expr *Arg = TheCall->getArg(ArgNum);
+  if (Arg->isTypeDependent() || Arg->isValueDependent())
+    return false;
+
+  // Check constant-ness first.
+  if (SemaBuiltinConstantArg(TheCall, ArgNum, Result))
+    return true;
+
+  // Bit-twiddling to test for a power of 2: for x > 0, x & (x-1) is zero if
+  // and only if x is a power of 2.
+  if (Result.isStrictlyPositive() && (Result & (Result - 1)) == 0)
+    return false;
+
+  return Diag(TheCall->getBeginLoc(), diag::err_argument_not_power_of_2)
+         << Arg->getSourceRange();
+}
+
+static bool IsShiftedByte(llvm::APSInt Value) {
+  if (Value.isNegative())
+    return false;
+
+  // Check if it's a shifted byte, by shifting it down
+  while (true) {
+    // If the value fits in the bottom byte, the check passes.
+    if (Value < 0x100)
+      return true;
+
+    // Otherwise, if the value has _any_ bits in the bottom byte, the check
+    // fails.
+    if ((Value & 0xFF) != 0)
+      return false;
+
+    // If the bottom 8 bits are all 0, but something above that is nonzero,
+    // then shifting the value right by 8 bits won't affect whether it's a
+    // shifted byte or not. So do that, and go round again.
+    Value >>= 8;
+  }
+}
+
+/// SemaBuiltinConstantArgShiftedByte - Check if argument ArgNum of TheCall is
+/// a constant expression representing an arbitrary byte value shifted left by
+/// a multiple of 8 bits.
+bool Sema::SemaBuiltinConstantArgShiftedByte(CallExpr *TheCall, int ArgNum) {
+  llvm::APSInt Result;
+
+  // We can't check the value of a dependent argument.
+  Expr *Arg = TheCall->getArg(ArgNum);
+  if (Arg->isTypeDependent() || Arg->isValueDependent())
+    return false;
+
+  // Check constant-ness first.
+  if (SemaBuiltinConstantArg(TheCall, ArgNum, Result))
+    return true;
+
+  if (IsShiftedByte(Result))
+    return false;
+
+  return Diag(TheCall->getBeginLoc(), diag::err_argument_not_shifted_byte)
+         << Arg->getSourceRange();
+}
+
+/// SemaBuiltinConstantArgShiftedByteOr0xFF - Check if argument ArgNum of
+/// TheCall is a constant expression representing either a shifted byte value,
+/// or a value of the form 0x??FF (i.e. a member of the arithmetic progression
+/// 0x00FF, 0x01FF, ..., 0xFFFF). This strange range check is needed for some
+/// Arm MVE intrinsics.
+bool Sema::SemaBuiltinConstantArgShiftedByteOrXXFF(CallExpr *TheCall,
+                                                   int ArgNum) {
+  llvm::APSInt Result;
+
+  // We can't check the value of a dependent argument.
+  Expr *Arg = TheCall->getArg(ArgNum);
+  if (Arg->isTypeDependent() || Arg->isValueDependent())
+    return false;
+
+  // Check constant-ness first.
+  if (SemaBuiltinConstantArg(TheCall, ArgNum, Result))
+    return true;
+
+  // Check to see if it's in either of the required forms.
+  if (IsShiftedByte(Result) ||
+      (Result > 0 && Result < 0x10000 && (Result & 0xFF) == 0xFF))
+    return false;
+
+  return Diag(TheCall->getBeginLoc(),
+              diag::err_argument_not_shifted_byte_or_xxff)
+         << Arg->getSourceRange();
 }
 
 /// SemaBuiltinARMMemoryTaggingCall - Handle calls of memory tagging extensions
@@ -11895,6 +12048,13 @@ static void AnalyzeImplicitConversions(Sema &S, Expr *OrigE, SourceLocation CC,
 
   if (E->isTypeDependent() || E->isValueDependent())
     return;
+
+  if (const auto *UO = dyn_cast<UnaryOperator>(E))
+    if (UO->getOpcode() == UO_Not &&
+        UO->getSubExpr()->isKnownToHaveBooleanValue())
+      S.Diag(UO->getBeginLoc(), diag::warn_bitwise_negation_bool)
+          << OrigE->getSourceRange() << T->isBooleanType()
+          << FixItHint::CreateReplacement(UO->getBeginLoc(), "!");
 
   // For conditional operators, we analyze the arguments as if they
   // were being fed directly into the output.

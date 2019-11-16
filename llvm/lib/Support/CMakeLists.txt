@@ -103,7 +103,6 @@ add_llvm_library(LLVMSupport
   IntEqClasses.cpp
   IntervalMap.cpp
   ItaniumManglingCanonicalizer.cpp
-  JamCRC.cpp
   JSON.cpp
   KnownBits.cpp
   LEB128.cpp
@@ -117,7 +116,6 @@ add_llvm_library(LLVMSupport
   MD5.cpp
   NativeFormatting.cpp
   Optional.cpp
-  Options.cpp
   Parallel.cpp
   PluginLoader.cpp
   PrettyStackTrace.cpp

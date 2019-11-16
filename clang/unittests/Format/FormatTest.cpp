@@ -4977,6 +4977,29 @@ TEST_F(FormatTest, TrailingReturnType) {
   verifyFormat("void f() { auto a = b->c(); }");
 }
 
+TEST_F(FormatTest, DeductionGuides) {
+  verifyFormat("template <class T> A(const T &, const T &) -> A<T &>;");
+  verifyFormat("template <class T> explicit A(T &, T &&) -> A<T>;");
+  verifyFormat("template <class... Ts> S(Ts...) -> S<Ts...>;");
+  verifyFormat(
+      "template <class... T>\n"
+      "array(T &&... t) -> array<std::common_type_t<T...>, sizeof...(T)>;");
+  verifyFormat("template <class T> A() -> A<decltype(p->foo<3>())>;");
+  verifyFormat("template <class T> A() -> A<decltype(foo<traits<1>>)>;");
+  verifyFormat("template <class T> A() -> A<sizeof(p->foo<1>)>;");
+  verifyFormat("template <class T> A() -> A<(3 < 2)>;");
+  verifyFormat("template <class T> A() -> A<((3) < (2))>;");
+  verifyFormat("template <class T> x() -> x<1>;");
+  verifyFormat("template <class T> explicit x(T &) -> x<1>;");
+
+  // Ensure not deduction guides.
+  verifyFormat("c()->f<int>();");
+  verifyFormat("x()->foo<1>;");
+  verifyFormat("x = p->foo<3>();");
+  verifyFormat("x()->x<1>();");
+  verifyFormat("x()->x<1>;");
+}
+
 TEST_F(FormatTest, BreaksFunctionDeclarationsWithTrailingTokens) {
   // Avoid breaking before trailing 'const' or other trailing annotations, if
   // they are not function-like.
@@ -6111,7 +6134,48 @@ TEST_F(FormatTest, ReturnTypeBreakingStyle) {
                "void\n"
                "A::operator>>() {}\n"
                "void\n"
-               "A::operator+() {}\n",
+               "A::operator+() {}\n"
+               "void\n"
+               "A::operator*() {}\n"
+               "void\n"
+               "A::operator->() {}\n"
+               "void\n"
+               "A::operator void *() {}\n"
+               "void\n"
+               "A::operator void &() {}\n"
+               "void\n"
+               "A::operator void &&() {}\n"
+               "void\n"
+               "A::operator char *() {}\n"
+               "void\n"
+               "A::operator[]() {}\n"
+               "void\n"
+               "A::operator!() {}\n",
+               Style);
+  verifyFormat("constexpr auto\n"
+               "operator()() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator>>() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator+() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator*() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator->() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator++() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator void *() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator void &() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator void &&() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator char *() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator!() const -> reference {}\n"
+               "constexpr auto\n"
+               "operator[]() const -> reference {}\n",
                Style);
   verifyFormat("void *operator new(std::size_t s);", // No break here.
                Style);
@@ -6912,6 +6976,7 @@ TEST_F(FormatTest, UnderstandsUnaryOperators) {
   verifyFormat("alignof(char);", getGoogleStyle());
 
   verifyFormat("return -1;");
+  verifyFormat("throw -1;");
   verifyFormat("switch (a) {\n"
                "case -1:\n"
                "  break;\n"
@@ -7037,31 +7102,31 @@ TEST_F(FormatTest, UnderstandsFunctionRefQualification) {
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  int &foo(const std::string &str) & noexcept {}\n"
+               "  int &foo(const std::string &str) &noexcept {}\n"
                "};",
                BreakTemplate);
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  int &foo(const std::string &str) && noexcept {}\n"
+               "  int &foo(const std::string &str) &&noexcept {}\n"
                "};",
                BreakTemplate);
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  int &foo(const std::string &str) const & noexcept {}\n"
+               "  int &foo(const std::string &str) const &noexcept {}\n"
                "};",
                BreakTemplate);
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  int &foo(const std::string &str) const & noexcept {}\n"
+               "  int &foo(const std::string &str) const &noexcept {}\n"
                "};",
                BreakTemplate);
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  auto foo(const std::string &str) && noexcept -> int & {}\n"
+               "  auto foo(const std::string &str) &&noexcept -> int & {}\n"
                "};",
                BreakTemplate);
 
@@ -7084,13 +7149,13 @@ TEST_F(FormatTest, UnderstandsFunctionRefQualification) {
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  int& foo(const std::string& str) const & noexcept {}\n"
+               "  int& foo(const std::string& str) const& noexcept {}\n"
                "};",
                AlignLeftBreakTemplate);
 
   verifyFormat("struct f {\n"
                "  template <class T>\n"
-               "  int& foo(const std::string& str) const & noexcept {}\n"
+               "  int& foo(const std::string& str) const&& noexcept {}\n"
                "};",
                AlignLeftBreakTemplate);
 
@@ -7099,6 +7164,24 @@ TEST_F(FormatTest, UnderstandsFunctionRefQualification) {
                "  auto foo(const std::string& str) && noexcept -> int& {}\n"
                "};",
                AlignLeftBreakTemplate);
+
+  // The `&` in `Type&` should not be confused with a trailing `&` of
+  // DEPRECATED(reason) member function.
+  verifyFormat("struct f {\n"
+               "  template <class T>\n"
+               "  DEPRECATED(reason)\n"
+               "  Type &foo(arguments) {}\n"
+               "};",
+               BreakTemplate);
+
+  verifyFormat("struct f {\n"
+               "  template <class T>\n"
+               "  DEPRECATED(reason)\n"
+               "  Type& foo(arguments) {}\n"
+               "};",
+               AlignLeftBreakTemplate);
+
+  verifyFormat("void (*foopt)(int) = &func;");
 }
 
 TEST_F(FormatTest, UnderstandsNewAndDelete) {
@@ -7523,6 +7606,8 @@ TEST_F(FormatTest, FormatsCasts) {
   verifyFormat("my_int a = (ns::my_int)-2;");
   verifyFormat("case (my_int)ONE:");
   verifyFormat("auto x = (X)this;");
+  // Casts in Obj-C style calls used to not be recognized as such.
+  verifyFormat("int a = [(type*)[((type*)val) arg] arg];", getGoogleStyle());
 
   // FIXME: single value wrapped with paren will be treated as cast.
   verifyFormat("void f(int i = (kValue)*kMask) {}");
@@ -7563,6 +7648,29 @@ TEST_F(FormatTest, FormatsCasts) {
   verifyFormat("int a = alignof(int *) + b;", getGoogleStyle());
   verifyFormat("bool b = f(g<int>) && c;");
   verifyFormat("typedef void (*f)(int i) func;");
+  verifyFormat("void operator++(int) noexcept;");
+  verifyFormat("void operator++(int &) noexcept;");
+  verifyFormat("void operator delete(void *, std::size_t, const std::nothrow_t "
+               "&) noexcept;");
+  verifyFormat(
+      "void operator delete(std::size_t, const std::nothrow_t &) noexcept;");
+  verifyFormat("void operator delete(const std::nothrow_t &) noexcept;");
+  verifyFormat("void operator delete(std::nothrow_t &) noexcept;");
+  verifyFormat("void operator delete(nothrow_t &) noexcept;");
+  verifyFormat("void operator delete(foo &) noexcept;");
+  verifyFormat("void operator delete(foo) noexcept;");
+  verifyFormat("void operator delete(int) noexcept;");
+  verifyFormat("void operator delete(int &) noexcept;");
+  verifyFormat("void operator delete(int &) volatile noexcept;");
+  verifyFormat("void operator delete(int &) const");
+  verifyFormat("void operator delete(int &) = default");
+  verifyFormat("void operator delete(int &) = delete");
+  verifyFormat("void operator delete(int &) [[noreturn]]");
+  verifyFormat("void operator delete(int &) throw();");
+  verifyFormat("void operator delete(int &) throw(int);");
+  verifyFormat("auto operator delete(int &) -> int;");
+  verifyFormat("auto operator delete(int &) override");
+  verifyFormat("auto operator delete(int &) final");
 
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa *foo = (aaaaaaaaaaaaaaaaa *)\n"
                "    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;");
@@ -10528,6 +10636,46 @@ TEST_F(FormatTest, ConfigurableSpacesInSquareBrackets) {
   // Lambdas.
   verifyFormat("int c = []() -> int { return 2; }();\n", Spaces);
   verifyFormat("return [ i, args... ] {};", Spaces);
+  verifyFormat("int foo = [ &bar ]() {};", Spaces);
+  verifyFormat("int foo = [ = ]() {};", Spaces);
+  verifyFormat("int foo = [ & ]() {};", Spaces);
+  verifyFormat("int foo = [ =, &bar ]() {};", Spaces);
+  verifyFormat("int foo = [ &bar, = ]() {};", Spaces);
+}
+
+TEST_F(FormatTest, ConfigurableSpaceBeforeBrackets) {
+  FormatStyle NoSpaceStyle = getLLVMStyle();
+  verifyFormat("int a[5];", NoSpaceStyle);
+  verifyFormat("a[3] += 42;", NoSpaceStyle);
+
+  verifyFormat("int a[1];", NoSpaceStyle);
+  verifyFormat("int 1 [a];", NoSpaceStyle);
+  verifyFormat("int a[1][2];", NoSpaceStyle);
+  verifyFormat("a[7] = 5;", NoSpaceStyle);
+  verifyFormat("int a = (f())[23];", NoSpaceStyle);
+  verifyFormat("f([] {})", NoSpaceStyle);
+
+  FormatStyle Space = getLLVMStyle();
+  Space.SpaceBeforeSquareBrackets = true;
+  verifyFormat("int c = []() -> int { return 2; }();\n", Space);
+  verifyFormat("return [i, args...] {};", Space);
+
+  verifyFormat("int a [5];", Space);
+  verifyFormat("a [3] += 42;", Space);
+  verifyFormat("constexpr char hello []{\"hello\"};", Space);
+  verifyFormat("double &operator[](int i) { return 0; }\n"
+               "int i;",
+               Space);
+  verifyFormat("std::unique_ptr<int []> foo() {}", Space);
+  verifyFormat("int i = a [a][a]->f();", Space);
+  verifyFormat("int i = (*b) [a]->f();", Space);
+
+  verifyFormat("int a [1];", Space);
+  verifyFormat("int 1 [a];", Space);
+  verifyFormat("int a [1][2];", Space);
+  verifyFormat("a [7] = 5;", Space);
+  verifyFormat("int a = (f()) [23];", Space);
+  verifyFormat("f([] {})", Space);
 }
 
 TEST_F(FormatTest, ConfigurableSpaceBeforeAssignmentOperators) {
@@ -12387,6 +12535,7 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(BreakStringLiterals);
   CHECK_PARSE_BOOL(CompactNamespaces);
   CHECK_PARSE_BOOL(ConstructorInitializerAllOnOneLineOrOnePerLine);
+  CHECK_PARSE_BOOL(DeriveLineEnding);
   CHECK_PARSE_BOOL(DerivePointerAlignment);
   CHECK_PARSE_BOOL_FIELD(DerivePointerAlignment, "DerivePointerBinding");
   CHECK_PARSE_BOOL(DisableFormat);
@@ -12415,6 +12564,8 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(SpaceBeforeCtorInitializerColon);
   CHECK_PARSE_BOOL(SpaceBeforeInheritanceColon);
   CHECK_PARSE_BOOL(SpaceBeforeRangeBasedForLoopColon);
+  CHECK_PARSE_BOOL(SpaceBeforeSquareBrackets);
+  CHECK_PARSE_BOOL(UseCRLF);
 
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterCaseLabel);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterClass);
@@ -12735,6 +12886,8 @@ TEST_F(FormatTest, ParsesConfiguration) {
               IncludeStyle.IncludeCategories, ExpectedCategories);
   CHECK_PARSE("IncludeIsMainRegex: 'abc$'", IncludeStyle.IncludeIsMainRegex,
               "abc$");
+  CHECK_PARSE("IncludeIsMainSourceRegex: 'abc$'",
+              IncludeStyle.IncludeIsMainSourceRegex, "abc$");
 
   Style.RawStringFormats.clear();
   std::vector<FormatStyle::RawStringFormat> ExpectedRawStringFormats = {
@@ -13941,6 +14094,94 @@ TEST_F(FormatTest, SupportsCRLF) {
             format("/*\r\n"
                    "    \r\r\r\n"
                    "*/"));
+
+  FormatStyle style = getLLVMStyle();
+
+  style.DeriveLineEnding = true;
+  style.UseCRLF = false;
+  EXPECT_EQ("union FooBarBazQux {\n"
+            "  int foo;\n"
+            "  int bar;\n"
+            "  int baz;\n"
+            "};",
+            format("union FooBarBazQux {\r\n"
+                   "  int foo;\n"
+                   "  int bar;\r\n"
+                   "  int baz;\n"
+                   "};",
+                   style));
+  style.UseCRLF = true;
+  EXPECT_EQ("union FooBarBazQux {\r\n"
+            "  int foo;\r\n"
+            "  int bar;\r\n"
+            "  int baz;\r\n"
+            "};",
+            format("union FooBarBazQux {\r\n"
+                   "  int foo;\n"
+                   "  int bar;\r\n"
+                   "  int baz;\n"
+                   "};",
+                   style));
+
+  style.DeriveLineEnding = false;
+  style.UseCRLF = false;
+  EXPECT_EQ("union FooBarBazQux {\n"
+            "  int foo;\n"
+            "  int bar;\n"
+            "  int baz;\n"
+            "  int qux;\n"
+            "};",
+            format("union FooBarBazQux {\r\n"
+                   "  int foo;\n"
+                   "  int bar;\r\n"
+                   "  int baz;\n"
+                   "  int qux;\r\n"
+                   "};",
+                   style));
+  style.UseCRLF = true;
+  EXPECT_EQ("union FooBarBazQux {\r\n"
+            "  int foo;\r\n"
+            "  int bar;\r\n"
+            "  int baz;\r\n"
+            "  int qux;\r\n"
+            "};",
+            format("union FooBarBazQux {\r\n"
+                   "  int foo;\n"
+                   "  int bar;\r\n"
+                   "  int baz;\n"
+                   "  int qux;\n"
+                   "};",
+                   style));
+
+  style.DeriveLineEnding = true;
+  style.UseCRLF = false;
+  EXPECT_EQ("union FooBarBazQux {\r\n"
+            "  int foo;\r\n"
+            "  int bar;\r\n"
+            "  int baz;\r\n"
+            "  int qux;\r\n"
+            "};",
+            format("union FooBarBazQux {\r\n"
+                   "  int foo;\n"
+                   "  int bar;\r\n"
+                   "  int baz;\n"
+                   "  int qux;\r\n"
+                   "};",
+                   style));
+  style.UseCRLF = true;
+  EXPECT_EQ("union FooBarBazQux {\n"
+            "  int foo;\n"
+            "  int bar;\n"
+            "  int baz;\n"
+            "  int qux;\n"
+            "};",
+            format("union FooBarBazQux {\r\n"
+                   "  int foo;\n"
+                   "  int bar;\r\n"
+                   "  int baz;\n"
+                   "  int qux;\n"
+                   "};",
+                   style));
 }
 
 TEST_F(FormatTest, MunchSemicolonAfterBlocks) {
@@ -14678,33 +14919,81 @@ TEST_F(FormatTest, AlternativeOperators) {
   */
 }
 
-TEST_F(FormatTest, NotCastRPaen) {
-
-  verifyFormat("void operator++(int) noexcept;");
-  verifyFormat("void operator++(int &) noexcept;");
-  verifyFormat("void operator delete(void *, std::size_t, const std::nothrow_t "
-               "&) noexcept;");
-  verifyFormat(
-      "void operator delete(std::size_t, const std::nothrow_t &) noexcept;");
-  verifyFormat("void operator delete(const std::nothrow_t &) noexcept;");
-  verifyFormat("void operator delete(std::nothrow_t &) noexcept;");
-  verifyFormat("void operator delete(nothrow_t &) noexcept;");
-  verifyFormat("void operator delete(foo &) noexcept;");
-  verifyFormat("void operator delete(foo) noexcept;");
-  verifyFormat("void operator delete(int) noexcept;");
-  verifyFormat("void operator delete(int &) noexcept;");
-  verifyFormat("void operator delete(int &) volatile noexcept;");
-  verifyFormat("void operator delete(int &) const");
-  verifyFormat("void operator delete(int &) = default");
-  verifyFormat("void operator delete(int &) = delete");
-  verifyFormat("void operator delete(int &) [[noreturn]]");
-  verifyFormat("void operator delete(int &) throw();");
-  verifyFormat("void operator delete(int &) throw(int);");
-  verifyFormat("auto operator delete(int &) -> int;");
-  verifyFormat("auto operator delete(int &) override");
-  verifyFormat("auto operator delete(int &) final");
+TEST_F(FormatTest, STLWhileNotDefineChed) {
+  verifyFormat("#if defined(while)\n"
+               "#define while EMIT WARNING C4005\n"
+               "#endif // while");
 }
 
-} // end namespace
-} // end namespace format
-} // end namespace clang
+TEST_F(FormatTest, OperatorSpacing) {
+  FormatStyle Style = getLLVMStyle();
+  Style.PointerAlignment = FormatStyle::PAS_Right;
+  verifyFormat("Foo::operator*();", Style);
+  verifyFormat("Foo::operator void *();", Style);
+  verifyFormat("Foo::operator()(void *);", Style);
+  verifyFormat("Foo::operator*(void *);", Style);
+  verifyFormat("Foo::operator*();", Style);
+  verifyFormat("operator*(int (*)(), class Foo);", Style);
+
+  verifyFormat("Foo::operator&();", Style);
+  verifyFormat("Foo::operator void &();", Style);
+  verifyFormat("Foo::operator()(void &);", Style);
+  verifyFormat("Foo::operator&(void &);", Style);
+  verifyFormat("Foo::operator&();", Style);
+  verifyFormat("operator&(int (&)(), class Foo);", Style);
+
+  verifyFormat("Foo::operator&&();", Style);
+  verifyFormat("Foo::operator void &&();", Style);
+  verifyFormat("Foo::operator()(void &&);", Style);
+  verifyFormat("Foo::operator&&(void &&);", Style);
+  verifyFormat("Foo::operator&&();", Style);
+  verifyFormat("operator&&(int(&&)(), class Foo);", Style);
+
+  Style.PointerAlignment = FormatStyle::PAS_Left;
+  verifyFormat("Foo::operator*();", Style);
+  verifyFormat("Foo::operator void*();", Style);
+  verifyFormat("Foo::operator()(void*);", Style);
+  verifyFormat("Foo::operator*(void*);", Style);
+  verifyFormat("Foo::operator*();", Style);
+  verifyFormat("operator*(int (*)(), class Foo);", Style);
+
+  verifyFormat("Foo::operator&();", Style);
+  verifyFormat("Foo::operator void&();", Style);
+  verifyFormat("Foo::operator()(void&);", Style);
+  verifyFormat("Foo::operator&(void&);", Style);
+  verifyFormat("Foo::operator&();", Style);
+  verifyFormat("operator&(int (&)(), class Foo);", Style);
+
+  verifyFormat("Foo::operator&&();", Style);
+  verifyFormat("Foo::operator void&&();", Style);
+  verifyFormat("Foo::operator()(void&&);", Style);
+  verifyFormat("Foo::operator&&(void&&);", Style);
+  verifyFormat("Foo::operator&&();", Style);
+  verifyFormat("operator&&(int(&&)(), class Foo);", Style);
+
+  Style.PointerAlignment = FormatStyle::PAS_Middle;
+  verifyFormat("Foo::operator*();", Style);
+  verifyFormat("Foo::operator void *();", Style);
+  verifyFormat("Foo::operator()(void *);", Style);
+  verifyFormat("Foo::operator*(void *);", Style);
+  verifyFormat("Foo::operator*();", Style);
+  verifyFormat("operator*(int (*)(), class Foo);", Style);
+
+  verifyFormat("Foo::operator&();", Style);
+  verifyFormat("Foo::operator void &();", Style);
+  verifyFormat("Foo::operator()(void &);", Style);
+  verifyFormat("Foo::operator&(void &);", Style);
+  verifyFormat("Foo::operator&();", Style);
+  verifyFormat("operator&(int (&)(), class Foo);", Style);
+
+  verifyFormat("Foo::operator&&();", Style);
+  verifyFormat("Foo::operator void &&();", Style);
+  verifyFormat("Foo::operator()(void &&);", Style);
+  verifyFormat("Foo::operator&&(void &&);", Style);
+  verifyFormat("Foo::operator&&();", Style);
+  verifyFormat("operator&&(int(&&)(), class Foo);", Style);
+}
+
+} // namespace
+} // namespace format
+} // namespace clang

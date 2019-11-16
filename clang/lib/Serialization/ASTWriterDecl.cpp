@@ -673,6 +673,7 @@ void ASTDeclWriter::VisitObjCMethodDecl(ObjCMethodDecl *D) {
   Record.push_back(D->isInstanceMethod());
   Record.push_back(D->isVariadic());
   Record.push_back(D->isPropertyAccessor());
+  Record.push_back(D->isSynthesizedAccessorStub());
   Record.push_back(D->isDefined());
   Record.push_back(D->isOverriding());
   Record.push_back(D->hasSkippedBody());
@@ -884,6 +885,8 @@ void ASTDeclWriter::VisitObjCPropertyImplDecl(ObjCPropertyImplDecl *D) {
   Record.AddDeclRef(D->getPropertyDecl());
   Record.AddDeclRef(D->getPropertyIvarDecl());
   Record.AddSourceLocation(D->getPropertyIvarDeclLoc());
+  Record.AddDeclRef(D->getGetterMethodDecl());
+  Record.AddDeclRef(D->getSetterMethodDecl());
   Record.AddStmt(D->getGetterCXXConstructor());
   Record.AddStmt(D->getSetterCXXAssignment());
   Code = serialization::DECL_OBJC_PROPERTY_IMPL;
@@ -1608,7 +1611,7 @@ void ASTDeclWriter::VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D) {
   VisitTypeDecl(D);
 
   Record.push_back(D->wasDeclaredWithTypename());
-
+  // TODO: Concepts - constrained parameters.
   bool OwnsDefaultArg = D->hasDefaultArgument() &&
                         !D->defaultArgumentWasInherited();
   Record.push_back(OwnsDefaultArg);
@@ -1638,6 +1641,7 @@ void ASTDeclWriter::VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *D) {
 
     Code = serialization::DECL_EXPANDED_NON_TYPE_TEMPLATE_PARM_PACK;
   } else {
+    // TODO: Concepts - constrained parameters.
     // Rest of NonTypeTemplateParmDecl.
     Record.push_back(D->isParameterPack());
     bool OwnsDefaultArg = D->hasDefaultArgument() &&
@@ -1667,6 +1671,7 @@ void ASTDeclWriter::VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *D) {
       Record.AddTemplateParameterList(D->getExpansionTemplateParameters(I));
     Code = serialization::DECL_EXPANDED_TEMPLATE_TEMPLATE_PARM_PACK;
   } else {
+    // TODO: Concepts - constrained parameters.
     // Rest of TemplateTemplateParmDecl.
     Record.push_back(D->isParameterPack());
     bool OwnsDefaultArg = D->hasDefaultArgument() &&

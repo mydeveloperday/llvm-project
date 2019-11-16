@@ -20,6 +20,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Pass.h"
@@ -346,7 +347,7 @@ char MachineModuleInfoWrapperPass::ID = 0;
 bool MachineModuleInfoWrapperPass::doInitialization(Module &M) {
   MMI.initialize();
   MMI.TheModule = &M;
-  MMI.DbgInfoAvailable = !empty(M.debug_compile_units());
+  MMI.DbgInfoAvailable = !M.debug_compile_units().empty();
   return false;
 }
 
@@ -361,6 +362,6 @@ MachineModuleInfo MachineModuleAnalysis::run(Module &M,
                                              ModuleAnalysisManager &) {
   MachineModuleInfo MMI(TM);
   MMI.TheModule = &M;
-  MMI.DbgInfoAvailable = !empty(M.debug_compile_units());
+  MMI.DbgInfoAvailable = !M.debug_compile_units().empty();
   return MMI;
 }

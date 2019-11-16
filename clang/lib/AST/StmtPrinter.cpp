@@ -697,7 +697,7 @@ void StmtPrinter::VisitOMPCriticalDirective(OMPCriticalDirective *Node) {
   Indent() << "#pragma omp critical";
   if (Node->getDirectiveName().getName()) {
     OS << " (";
-    Node->getDirectiveName().printName(OS);
+    Node->getDirectiveName().printName(OS, Policy);
     OS << ")";
   }
   PrintOMPExecutableDirective(Node);
@@ -820,6 +820,30 @@ void StmtPrinter::VisitOMPTaskLoopDirective(OMPTaskLoopDirective *Node) {
 void StmtPrinter::VisitOMPTaskLoopSimdDirective(
     OMPTaskLoopSimdDirective *Node) {
   Indent() << "#pragma omp taskloop simd";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPMasterTaskLoopDirective(
+    OMPMasterTaskLoopDirective *Node) {
+  Indent() << "#pragma omp master taskloop";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPMasterTaskLoopSimdDirective(
+    OMPMasterTaskLoopSimdDirective *Node) {
+  Indent() << "#pragma omp master taskloop simd";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPParallelMasterTaskLoopDirective(
+    OMPParallelMasterTaskLoopDirective *Node) {
+  Indent() << "#pragma omp parallel master taskloop";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPParallelMasterTaskLoopSimdDirective(
+    OMPParallelMasterTaskLoopSimdDirective *Node) {
+  Indent() << "#pragma omp parallel master taskloop simd";
   PrintOMPExecutableDirective(Node);
 }
 
@@ -1280,7 +1304,7 @@ void StmtPrinter::VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *Node){
 void StmtPrinter::VisitGenericSelectionExpr(GenericSelectionExpr *Node) {
   OS << "_Generic(";
   PrintExpr(Node->getControllingExpr());
-  for (const GenericSelectionExpr::Association &Assoc : Node->associations()) {
+  for (const GenericSelectionExpr::Association Assoc : Node->associations()) {
     OS << ", ";
     QualType T = Assoc.getType();
     if (T.isNull())
@@ -1677,6 +1701,15 @@ void StmtPrinter::VisitCUDAKernelCallExpr(CUDAKernelCallExpr *Node) {
   OS << ">>>(";
   PrintCallArgs(Node);
   OS << ")";
+}
+
+void StmtPrinter::VisitCXXRewrittenBinaryOperator(
+    CXXRewrittenBinaryOperator *Node) {
+  CXXRewrittenBinaryOperator::DecomposedForm Decomposed =
+      Node->getDecomposedForm();
+  PrintExpr(const_cast<Expr*>(Decomposed.LHS));
+  OS << ' ' << BinaryOperator::getOpcodeStr(Decomposed.Opcode) << ' ';
+  PrintExpr(const_cast<Expr*>(Decomposed.RHS));
 }
 
 void StmtPrinter::VisitCXXNamedCastExpr(CXXNamedCastExpr *Node) {
@@ -2217,6 +2250,17 @@ void StmtPrinter::VisitCXXFoldExpr(CXXFoldExpr *E) {
     PrintExpr(E->getRHS());
   }
   OS << ")";
+}
+
+void StmtPrinter::VisitConceptSpecializationExpr(ConceptSpecializationExpr *E) {
+  NestedNameSpecifierLoc NNS = E->getNestedNameSpecifierLoc();
+  if (NNS)
+    NNS.getNestedNameSpecifier()->print(OS, Policy);
+  if (E->getTemplateKWLoc().isValid())
+    OS << "template ";
+  OS << E->getFoundDecl()->getName();
+  printTemplateArgumentList(OS, E->getTemplateArgsAsWritten()->arguments(),
+                            Policy);
 }
 
 // C++ Coroutines TS

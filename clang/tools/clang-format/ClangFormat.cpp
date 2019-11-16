@@ -76,9 +76,9 @@ static cl::opt<std::string>
 
 static cl::opt<std::string> AssumeFileName(
     "assume-filename",
-    cl::desc("When reading from stdin, clang-format assumes this\n"
-             "filename to look for a style config file (with\n"
-             "-style=file) and to determine the language."),
+    cl::desc("Override filename used to determine the language.\n"
+             "When reading from stdin, clang-format assumes this\n"
+             "filename to determine the language."),
     cl::init("<stdin>"), cl::cat(ClangFormatCategory));
 
 static cl::opt<bool> Inplace("i",
@@ -290,6 +290,53 @@ static void outputReplacementsXML(const Replacements &Replaces) {
   }
 }
 
+static bool
+emitReplacementWarnings(const Replacements &Replaces, StringRef AssumedFileName,
+                        const std::unique_ptr<llvm::MemoryBuffer> &Code) {
+  if (Replaces.empty())
+    return false;
+
+  unsigned Errors = 0;
+  if (WarnFormat && !NoWarnFormat) {
+    llvm::SourceMgr Mgr;
+    const char *StartBuf = Code->getBufferStart();
+
+    Mgr.AddNewSourceBuffer(
+        MemoryBuffer::getMemBuffer(StartBuf, AssumedFileName), SMLoc());
+    for (const auto &R : Replaces) {
+      SMDiagnostic Diag = Mgr.GetMessage(
+          SMLoc::getFromPointer(StartBuf + R.getOffset()),
+          WarningsAsErrors ? SourceMgr::DiagKind::DK_Error
+                           : SourceMgr::DiagKind::DK_Warning,
+          "code should be clang-formatted [-Wclang-format-violations]");
+
+      Diag.print(nullptr, llvm::errs(), (ShowColors && !NoShowColors));
+      if (ErrorLimit && ++Errors >= ErrorLimit)
+        break;
+    }
+  }
+  return WarningsAsErrors;
+}
+
+static void outputXML(const Replacements &Replaces,
+                      const Replacements &FormatChanges,
+                      const FormattingAttemptStatus &Status,
+                      const cl::opt<unsigned> &Cursor,
+                      unsigned CursorPosition) {
+  outs() << "<?xml version='1.0'?>\n<replacements "
+            "xml:space='preserve' incomplete_format='"
+         << (Status.FormatComplete ? "false" : "true") << "'";
+  if (!Status.FormatComplete)
+    outs() << " line='" << Status.Line << "'";
+  outs() << ">\n";
+  if (Cursor.getNumOccurrences() != 0)
+    outs() << "<cursor>" << FormatChanges.getShiftedCodePosition(CursorPosition)
+           << "</cursor>\n";
+
+  outputReplacementsXML(Replaces);
+  outs() << "</replacements>\n";
+}
+
 // Returns true on error.
 static bool format(StringRef FileName) {
   if (!OutputXML && Inplace && FileName == "-") {
@@ -309,26 +356,9 @@ static bool format(StringRef FileName) {
   if (Code->getBufferSize() == 0)
     return false; // Empty files are formatted correctly.
 
-  // Check to see if the buffer has a UTF Byte Order Mark (BOM).
-  // We only support UTF-8 with and without a BOM right now.  See
-  // https://en.wikipedia.org/wiki/Byte_order_mark#Byte_order_marks_by_encoding
-  // for more information.
   StringRef BufStr = Code->getBuffer();
-  const char *InvalidBOM =
-      llvm::StringSwitch<const char *>(BufStr)
-          .StartsWith(llvm::StringLiteral::withInnerNUL("\x00\x00\xFE\xFF"),
-                      "UTF-32 (BE)")
-          .StartsWith(llvm::StringLiteral::withInnerNUL("\xFF\xFE\x00\x00"),
-                      "UTF-32 (LE)")
-          .StartsWith("\xFE\xFF", "UTF-16 (BE)")
-          .StartsWith("\xFF\xFE", "UTF-16 (LE)")
-          .StartsWith("\x2B\x2F\x76", "UTF-7")
-          .StartsWith("\xF7\x64\x4C", "UTF-1")
-          .StartsWith("\xDD\x73\x66\x73", "UTF-EBCDIC")
-          .StartsWith("\x0E\xFE\xFF", "SCSU")
-          .StartsWith("\xFB\xEE\x28", "BOCU-1")
-          .StartsWith("\x84\x31\x95\x33", "GB-18030")
-          .Default(nullptr);
+
+  const char *InvalidBOM = SrcMgr::ContentCache::getInvalidBOM(BufStr);
 
   if (InvalidBOM) {
     errs() << "error: encoding with unsupported byte order mark \""
@@ -343,6 +373,10 @@ static bool format(StringRef FileName) {
   if (fillRanges(Code.get(), Ranges))
     return true;
   StringRef AssumedFileName = (FileName == "-") ? AssumeFileName : FileName;
+  if (AssumedFileName.empty()) {
+    llvm::errs() << "error: empty filenames are not allowed\n";
+    return true;
+  }
 
   llvm::Expected<FormatStyle> FormatStyle =
       getStyle(Style, AssumedFileName, FallbackStyle, Code->getBuffer());
@@ -369,59 +403,9 @@ static bool format(StringRef FileName) {
   Replaces = Replaces.merge(FormatChanges);
   if (OutputXML || DryRun) {
     if (DryRun) {
-      if (!Replaces.empty()) {
-        IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts =
-            new DiagnosticOptions();
-        DiagOpts->ShowColors = (ShowColors && !NoShowColors);
-
-        TextDiagnosticPrinter *DiagsBuffer =
-            new TextDiagnosticPrinter(llvm::errs(), &*DiagOpts, false);
-
-        IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
-        IntrusiveRefCntPtr<DiagnosticsEngine> Diags(
-            new DiagnosticsEngine(DiagID, &*DiagOpts, DiagsBuffer));
-
-        IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFileSystem(
-            new llvm::vfs::InMemoryFileSystem);
-        FileManager Files(FileSystemOptions(), InMemoryFileSystem);
-        SourceManager Sources(*Diags, Files);
-        FileID FileID = createInMemoryFile(AssumedFileName, Code.get(), Sources,
-                                           Files, InMemoryFileSystem.get());
-
-        const unsigned ID = Diags->getCustomDiagID(
-            WarningsAsErrors ? clang::DiagnosticsEngine::Error
-                             : clang::DiagnosticsEngine::Warning,
-            "code should be clang-formatted [-Wclang-format-violations]");
-
-        unsigned Errors = 0;
-        DiagsBuffer->BeginSourceFile(LangOptions(), nullptr);
-        if (WarnFormat && !NoWarnFormat) {
-          for (const auto &R : Replaces) {
-            Diags->Report(Sources.getLocForStartOfFile(FileID).getLocWithOffset(
-                              R.getOffset()),
-                          ID);
-            Errors++;
-            if (ErrorLimit && Errors >= ErrorLimit)
-              break;
-          }
-        }
-        DiagsBuffer->EndSourceFile();
-      }
-      return true;
+      return emitReplacementWarnings(Replaces, AssumedFileName, Code);
     } else {
-      outs() << "<?xml version='1.0'?>\n<replacements "
-                "xml:space='preserve' incomplete_format='"
-             << (Status.FormatComplete ? "false" : "true") << "'";
-      if (!Status.FormatComplete)
-        outs() << " line='" << Status.Line << "'";
-      outs() << ">\n";
-      if (Cursor.getNumOccurrences() != 0)
-        outs() << "<cursor>"
-               << FormatChanges.getShiftedCodePosition(CursorPosition)
-               << "</cursor>\n";
-
-      outputReplacementsXML(Replaces);
-      outs() << "</replacements>\n";
+      outputXML(Replaces, FormatChanges, Status, Cursor, CursorPosition);
     }
   } else {
     IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFileSystem(
@@ -461,6 +445,38 @@ static void PrintVersion(raw_ostream &OS) {
   OS << clang::getClangToolFullVersion("clang-format") << '\n';
 }
 
+// Dump the configuration.
+static int dumpConfig() {
+  StringRef FileName;
+  std::unique_ptr<llvm::MemoryBuffer> Code;
+  if (FileNames.empty()) {
+    // We can't read the code to detect the language if there's no
+    // file name, so leave Code empty here.
+    FileName = AssumeFileName;
+  } else {
+    // Read in the code in case the filename alone isn't enough to
+    // detect the language.
+    ErrorOr<std::unique_ptr<MemoryBuffer>> CodeOrErr =
+        MemoryBuffer::getFileOrSTDIN(FileNames[0]);
+    if (std::error_code EC = CodeOrErr.getError()) {
+      llvm::errs() << EC.message() << "\n";
+      return 1;
+    }
+    FileName = (FileNames[0] == "-") ? AssumeFileName : FileNames[0];
+    Code = std::move(CodeOrErr.get());
+  }
+  llvm::Expected<clang::format::FormatStyle> FormatStyle =
+      clang::format::getStyle(Style, FileName, FallbackStyle,
+                              Code ? Code->getBuffer() : "");
+  if (!FormatStyle) {
+    llvm::errs() << llvm::toString(FormatStyle.takeError()) << "\n";
+    return 1;
+  }
+  std::string Config = clang::format::configurationAsText(*FormatStyle);
+  outs() << Config << "\n";
+  return 0;
+}
+
 int main(int argc, const char **argv) {
   llvm::InitLLVM X(argc, argv);
 
@@ -482,34 +498,7 @@ int main(int argc, const char **argv) {
   }
 
   if (DumpConfig) {
-    StringRef FileName;
-    std::unique_ptr<llvm::MemoryBuffer> Code;
-    if (FileNames.empty()) {
-      // We can't read the code to detect the language if there's no
-      // file name, so leave Code empty here.
-      FileName = AssumeFileName;
-    } else {
-      // Read in the code in case the filename alone isn't enough to
-      // detect the language.
-      ErrorOr<std::unique_ptr<MemoryBuffer>> CodeOrErr =
-          MemoryBuffer::getFileOrSTDIN(FileNames[0]);
-      if (std::error_code EC = CodeOrErr.getError()) {
-        llvm::errs() << EC.message() << "\n";
-        return 1;
-      }
-      FileName = (FileNames[0] == "-") ? AssumeFileName : FileNames[0];
-      Code = std::move(CodeOrErr.get());
-    }
-    llvm::Expected<clang::format::FormatStyle> FormatStyle =
-        clang::format::getStyle(Style, FileName, FallbackStyle,
-                                Code ? Code->getBuffer() : "");
-    if (!FormatStyle) {
-      llvm::errs() << llvm::toString(FormatStyle.takeError()) << "\n";
-      return 1;
-    }
-    std::string Config = clang::format::configurationAsText(*FormatStyle);
-    outs() << Config << "\n";
-    return 0;
+    return dumpConfig();
   }
 
   bool Error = false;

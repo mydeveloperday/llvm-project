@@ -312,7 +312,8 @@ unsigned getMinFlatWorkGroupSize(const MCSubtargetInfo *STI) {
 }
 
 unsigned getMaxFlatWorkGroupSize(const MCSubtargetInfo *STI) {
-  return 2048;
+  // Some subtargets allow encoding 2048, but this isn't tested or supported.
+  return 1024;
 }
 
 unsigned getWavesPerWorkGroup(const MCSubtargetInfo *STI,
@@ -542,16 +543,17 @@ amdhsa::kernel_descriptor_t getDefaultAmdhsaKernelDescriptor(
 }
 
 bool isGroupSegment(const GlobalValue *GV) {
-  return GV->getType()->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS;
+  return GV->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS;
 }
 
 bool isGlobalSegment(const GlobalValue *GV) {
-  return GV->getType()->getAddressSpace() == AMDGPUAS::GLOBAL_ADDRESS;
+  return GV->getAddressSpace() == AMDGPUAS::GLOBAL_ADDRESS;
 }
 
 bool isReadOnlySegment(const GlobalValue *GV) {
-  return GV->getType()->getAddressSpace() == AMDGPUAS::CONSTANT_ADDRESS ||
-         GV->getType()->getAddressSpace() == AMDGPUAS::CONSTANT_ADDRESS_32BIT;
+  unsigned AS = GV->getAddressSpace();
+  return AS == AMDGPUAS::CONSTANT_ADDRESS ||
+         AS == AMDGPUAS::CONSTANT_ADDRESS_32BIT;
 }
 
 bool shouldEmitConstantsToTextSection(const Triple &TT) {

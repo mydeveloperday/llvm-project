@@ -2475,6 +2475,11 @@ bool Sema::CheckFunctionReturnType(QualType T, SourceLocation Loc) {
     checkNonTrivialCUnion(T, Loc, NTCUC_FunctionReturn,
                           NTCUK_Destruct|NTCUK_Copy);
 
+  // C++2a [dcl.fct]p12:
+  //   A volatile-qualified return type is deprecated
+  if (T.isVolatileQualified() && getLangOpts().CPlusPlus2a)
+    Diag(Loc, diag::warn_deprecated_volatile_return) << T;
+
   return false;
 }
 
@@ -2554,6 +2559,11 @@ QualType Sema::BuildFunctionType(QualType T,
         FixItHint::CreateInsertion(Loc, "*");
       Invalid = true;
     }
+
+    // C++2a [dcl.fct]p4:
+    //   A parameter with volatile-qualified type is deprecated
+    if (ParamType.isVolatileQualified() && getLangOpts().CPlusPlus2a)
+      Diag(Loc, diag::warn_deprecated_volatile_param) << ParamType;
 
     ParamTypes[Idx] = ParamType;
   }
@@ -3129,7 +3139,7 @@ static QualType GetDeclSpecTypeForDeclarator(TypeProcessingState &state,
 
       T = SemaRef.Context.IntTy;
       D.setInvalidType(true);
-    } else if (!HaveTrailing &&
+    } else if (Auto && !HaveTrailing &&
                D.getContext() != DeclaratorContext::LambdaExprContext) {
       // If there was a trailing return type, we already got
       // warn_cxx98_compat_trailing_return_type in the parser.
@@ -4685,6 +4695,11 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
           S.Diag(DeclType.Loc, diag::err_func_returning_qualified_void) << T;
         } else
           diagnoseRedundantReturnTypeQualifiers(S, T, D, chunkIndex);
+
+        // C++2a [dcl.fct]p12:
+        //   A volatile-qualified return type is deprecated
+        if (T.isVolatileQualified() && S.getLangOpts().CPlusPlus2a)
+          S.Diag(DeclType.Loc, diag::warn_deprecated_volatile_return) << T;
       }
 
       // Objective-C ARC ownership qualifiers are ignored on the function
@@ -5167,6 +5182,13 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
   if (D.getDeclSpec().getConstexprSpecifier() == CSK_constexpr &&
       T->isObjectType())
     T.addConst();
+
+  // C++2a [dcl.fct]p4:
+  //   A parameter with volatile-qualified type is deprecated
+  if (T.isVolatileQualified() && S.getLangOpts().CPlusPlus2a &&
+      (D.getContext() == DeclaratorContext::PrototypeContext ||
+       D.getContext() == DeclaratorContext::LambdaExprParameterContext))
+    S.Diag(D.getIdentifierLoc(), diag::warn_deprecated_volatile_param) << T;
 
   // If there was an ellipsis in the declarator, the declaration declares a
   // parameter pack whose type may be a pack expansion type.
@@ -6303,7 +6325,8 @@ namespace {
       Pointer,
       BlockPointer,
       Reference,
-      MemberPointer
+      MemberPointer,
+      MacroQualified,
     };
 
     QualType Original;
@@ -6334,6 +6357,9 @@ namespace {
         } else if (isa<AttributedType>(Ty)) {
           T = cast<AttributedType>(Ty)->getEquivalentType();
           Stack.push_back(Attributed);
+        } else if (isa<MacroQualifiedType>(Ty)) {
+          T = cast<MacroQualifiedType>(Ty)->getUnderlyingType();
+          Stack.push_back(MacroQualified);
         } else {
           const Type *DTy = Ty->getUnqualifiedDesugaredType();
           if (Ty == DTy) {
@@ -6389,6 +6415,9 @@ namespace {
         QualType New = wrap(C, cast<ParenType>(Old)->getInnerType(), I);
         return C.getParenType(New);
       }
+
+      case MacroQualified:
+        return wrap(C, cast<MacroQualifiedType>(Old)->getUnderlyingType(), I);
 
       case Pointer: {
         QualType New = wrap(C, cast<PointerType>(Old)->getPointeeType(), I);
@@ -7193,6 +7222,7 @@ static bool isPermittedNeonBaseType(QualType &Ty,
   // Signed poly is mathematically wrong, but has been baked into some ABIs by
   // now.
   bool IsPolyUnsigned = Triple.getArch() == llvm::Triple::aarch64 ||
+                        Triple.getArch() == llvm::Triple::aarch64_32 ||
                         Triple.getArch() == llvm::Triple::aarch64_be;
   if (VecKind == VectorType::NeonPolyVector) {
     if (IsPolyUnsigned) {
@@ -7210,10 +7240,8 @@ static bool isPermittedNeonBaseType(QualType &Ty,
 
   // Non-polynomial vector types: the usual suspects are allowed, as well as
   // float64_t on AArch64.
-  bool Is64Bit = Triple.getArch() == llvm::Triple::aarch64 ||
-                 Triple.getArch() == llvm::Triple::aarch64_be;
-
-  if (Is64Bit && BTy->getKind() == BuiltinType::Double)
+  if ((Triple.isArch64Bit() || Triple.getArch() == llvm::Triple::aarch64_32) &&
+      BTy->getKind() == BuiltinType::Double)
     return true;
 
   return BTy->getKind() == BuiltinType::SChar ||
@@ -7239,8 +7267,10 @@ static bool isPermittedNeonBaseType(QualType &Ty,
 /// match one of the standard Neon vector types.
 static void HandleNeonVectorTypeAttr(QualType &CurType, const ParsedAttr &Attr,
                                      Sema &S, VectorType::VectorKind VecKind) {
-  // Target must have NEON
-  if (!S.Context.getTargetInfo().hasFeature("neon")) {
+  // Target must have NEON (or MVE, whose vectors are similar enough
+  // not to need a separate attribute)
+  if (!S.Context.getTargetInfo().hasFeature("neon") &&
+      !S.Context.getTargetInfo().hasFeature("mve")) {
     S.Diag(Attr.getLoc(), diag::err_attribute_unsupported) << Attr;
     Attr.setInvalid();
     return;
@@ -7939,16 +7969,15 @@ static void assignInheritanceModel(Sema &S, CXXRecordDecl *RD) {
       break;
     }
 
-    SourceRange Loc = 
-    S.ImplicitMSInheritanceAttrLoc.isValid()
-                                 ? S.ImplicitMSInheritanceAttrLoc
-                                 : RD->getSourceRange();
-  RD->addAttr(MSInheritanceAttr::CreateImplicit(
-      S.getASTContext(),
-      /*BestCase=*/S.MSPointerToMemberRepresentationMethod ==
-          LangOptions::PPTMK_BestCase,
-      Loc, AttributeCommonInfo::AS_Microsoft, IM));
-  S.Consumer.AssignInheritanceModel(RD);
+    SourceRange Loc = S.ImplicitMSInheritanceAttrLoc.isValid()
+                          ? S.ImplicitMSInheritanceAttrLoc
+                          : RD->getSourceRange();
+    RD->addAttr(MSInheritanceAttr::CreateImplicit(
+        S.getASTContext(),
+        /*BestCase=*/S.MSPointerToMemberRepresentationMethod ==
+            LangOptions::PPTMK_BestCase,
+        Loc, AttributeCommonInfo::AS_Microsoft, IM));
+    S.Consumer.AssignInheritanceModel(RD);
   }
 }
 

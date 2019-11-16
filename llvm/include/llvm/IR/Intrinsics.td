@@ -1070,7 +1070,7 @@ def int_experimental_guard : Intrinsic<[], [llvm_i1_ty, llvm_vararg_ty],
 
 // Supports widenable conditions for guards represented as explicit branches.
 def int_experimental_widenable_condition : Intrinsic<[llvm_i1_ty], [],
-                                           [IntrInaccessibleMemOnly, IntrWillReturn]>;
+        [IntrInaccessibleMemOnly, IntrWillReturn, IntrSpeculatable]>;
 
 // NOP: calls/invokes to this intrinsic are removed by codegen
 def int_donothing : Intrinsic<[], [], [IntrNoMem, IntrWillReturn]>;
@@ -1081,7 +1081,7 @@ def int_donothing : Intrinsic<[], [], [IntrNoMem, IntrWillReturn]>;
 // which specify that infinite loops must be preserved.
 def int_sideeffect : Intrinsic<[], [], [IntrInaccessibleMemOnly, IntrWillReturn]>;
 
-// Intrisics to support half precision floating point format
+// Intrinsics to support half precision floating point format
 let IntrProperties = [IntrNoMem, IntrWillReturn] in {
 def int_convert_to_fp16   : Intrinsic<[llvm_i16_ty], [llvm_anyfloat_ty]>;
 def int_convert_from_fp16 : Intrinsic<[llvm_anyfloat_ty], [llvm_i16_ty]>;

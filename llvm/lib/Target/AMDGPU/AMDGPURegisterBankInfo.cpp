@@ -323,6 +323,8 @@ AMDGPURegisterBankInfo::getInstrAlternativeMappingsIntrinsicWSideEffects(
   }
 }
 
+// FIXME: Returns uniform if there's no source value information. This is
+// probably wrong.
 static bool isInstrUniformNonExtLoadAlign4(const MachineInstr &MI) {
   if (!MI.hasOneMemOperand())
     return false;
@@ -1047,8 +1049,13 @@ bool AMDGPURegisterBankInfo::applyMappingWideLoad(MachineInstr &MI,
   SmallVector<unsigned, 1> SrcRegs(OpdMapper.getVRegs(1));
 
   // If the pointer is an SGPR, we have nothing to do.
-  if (SrcRegs.empty())
-    return false;
+  if (SrcRegs.empty()) {
+    Register PtrReg = MI.getOperand(1).getReg();
+    const RegisterBank *PtrBank = getRegBank(PtrReg, MRI, *TRI);
+    if (PtrBank == &AMDGPU::SGPRRegBank)
+      return false;
+    SrcRegs.push_back(PtrReg);
+  }
 
   assert(LoadSize % MaxNonSmrdLoadSize == 0);
 
@@ -1588,7 +1595,7 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
     if (DstTy != LLT::vector(2, 16))
       break;
 
-    assert(MI.getNumOperands() == 3 && empty(OpdMapper.getVRegs(0)));
+    assert(MI.getNumOperands() == 3 && OpdMapper.getVRegs(0).empty());
     substituteSimpleCopyRegs(OpdMapper, 1);
     substituteSimpleCopyRegs(OpdMapper, 2);
 
@@ -1644,7 +1651,7 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
   case AMDGPU::G_EXTRACT_VECTOR_ELT: {
     SmallVector<Register, 2> DstRegs(OpdMapper.getVRegs(0));
 
-    assert(empty(OpdMapper.getVRegs(1)) && empty(OpdMapper.getVRegs(2)));
+    assert(OpdMapper.getVRegs(1).empty() && OpdMapper.getVRegs(2).empty());
 
     if (DstRegs.empty()) {
       applyDefaultMapping(OpdMapper);
@@ -1708,9 +1715,9 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
   case AMDGPU::G_INSERT_VECTOR_ELT: {
     SmallVector<Register, 2> InsRegs(OpdMapper.getVRegs(2));
 
-    assert(empty(OpdMapper.getVRegs(0)));
-    assert(empty(OpdMapper.getVRegs(1)));
-    assert(empty(OpdMapper.getVRegs(3)));
+    assert(OpdMapper.getVRegs(0).empty());
+    assert(OpdMapper.getVRegs(1).empty());
+    assert(OpdMapper.getVRegs(3).empty());
 
     if (InsRegs.empty()) {
       applyDefaultMapping(OpdMapper);
@@ -1785,8 +1792,8 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
     case Intrinsic::amdgcn_readlane: {
       substituteSimpleCopyRegs(OpdMapper, 2);
 
-      assert(empty(OpdMapper.getVRegs(0)));
-      assert(empty(OpdMapper.getVRegs(3)));
+      assert(OpdMapper.getVRegs(0).empty());
+      assert(OpdMapper.getVRegs(3).empty());
 
       // Make sure the index is an SGPR. It doesn't make sense to run this in a
       // waterfall loop, so assume it's a uniform value.
@@ -1794,9 +1801,9 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
       return;
     }
     case Intrinsic::amdgcn_writelane: {
-      assert(empty(OpdMapper.getVRegs(0)));
-      assert(empty(OpdMapper.getVRegs(2)));
-      assert(empty(OpdMapper.getVRegs(3)));
+      assert(OpdMapper.getVRegs(0).empty());
+      assert(OpdMapper.getVRegs(2).empty());
+      assert(OpdMapper.getVRegs(3).empty());
 
       substituteSimpleCopyRegs(OpdMapper, 4); // VGPR input val
       constrainOpWithReadfirstlane(MI, MRI, 2); // Source value
@@ -1818,7 +1825,7 @@ void AMDGPURegisterBankInfo::applyMappingImpl(
     case Intrinsic::amdgcn_ds_ordered_add:
     case Intrinsic::amdgcn_ds_ordered_swap: {
       // This is only allowed to execute with 1 lane, so readfirstlane is safe.
-      assert(empty(OpdMapper.getVRegs(0)));
+      assert(OpdMapper.getVRegs(0).empty());
       substituteSimpleCopyRegs(OpdMapper, 3);
       constrainOpWithReadfirstlane(MI, MRI, 2); // M0
       return;
@@ -2025,7 +2032,7 @@ AMDGPURegisterBankInfo::getInstrMappingForLoad(const MachineInstr &MI) const {
 
   const MachineFunction &MF = *MI.getParent()->getParent();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
-  SmallVector<const ValueMapping*, 8> OpdsMapping(MI.getNumOperands());
+  SmallVector<const ValueMapping*, 2> OpdsMapping(2);
   unsigned Size = getSizeInBits(MI.getOperand(0).getReg(), MRI, *TRI);
   LLT LoadTy = MRI.getType(MI.getOperand(0).getReg());
   Register PtrReg = MI.getOperand(1).getReg();
@@ -2036,7 +2043,10 @@ AMDGPURegisterBankInfo::getInstrMappingForLoad(const MachineInstr &MI) const {
   const ValueMapping *ValMapping;
   const ValueMapping *PtrMapping;
 
-  if ((AS != AMDGPUAS::LOCAL_ADDRESS && AS != AMDGPUAS::REGION_ADDRESS &&
+  const RegisterBank *PtrBank = getRegBank(PtrReg, MRI, *TRI);
+
+  if (PtrBank == &AMDGPU::SGPRRegBank &&
+      (AS != AMDGPUAS::LOCAL_ADDRESS && AS != AMDGPUAS::REGION_ADDRESS &&
        AS != AMDGPUAS::PRIVATE_ADDRESS) &&
       isInstrUniformNonExtLoadAlign4(MI)) {
     // We have a uniform instruction so we want to use an SMRD load
@@ -2258,7 +2268,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
 
     LLVM_FALLTHROUGH;
   }
-  case AMDGPU::G_GEP:
+  case AMDGPU::G_PTR_ADD:
   case AMDGPU::G_ADD:
   case AMDGPU::G_SUB:
   case AMDGPU::G_MUL:
@@ -2266,9 +2276,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case AMDGPU::G_LSHR:
   case AMDGPU::G_ASHR:
   case AMDGPU::G_UADDO:
-  case AMDGPU::G_SADDO:
   case AMDGPU::G_USUBO:
-  case AMDGPU::G_SSUBO:
   case AMDGPU::G_UADDE:
   case AMDGPU::G_SADDE:
   case AMDGPU::G_USUBE:
@@ -2305,6 +2313,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case AMDGPU::G_FCANONICALIZE:
   case AMDGPU::G_INTRINSIC_TRUNC:
   case AMDGPU::G_INTRINSIC_ROUND:
+  case AMDGPU::G_AMDGPU_FFBH_U32:
     return getDefaultMappingVOP(MI);
   case AMDGPU::G_UMULH:
   case AMDGPU::G_SMULH: {
@@ -2948,7 +2957,8 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case AMDGPU::G_ATOMICRMW_UMAX:
   case AMDGPU::G_ATOMICRMW_UMIN:
   case AMDGPU::G_ATOMICRMW_FADD:
-  case AMDGPU::G_ATOMIC_CMPXCHG: {
+  case AMDGPU::G_ATOMIC_CMPXCHG:
+  case AMDGPU::G_AMDGPU_ATOMIC_CMPXCHG: {
     return getDefaultMappingAllVGPR(MI);
   }
   case AMDGPU::G_BRCOND: {

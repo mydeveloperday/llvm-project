@@ -477,7 +477,7 @@ bool DWARFExpression::Update_DW_OP_addr(lldb::addr_t file_addr) {
                           m_data.GetByteOrder(), addr_byte_size);
 
       // Replace the address in the new buffer
-      if (encoder.PutMaxU64(offset, addr_byte_size, file_addr) == UINT32_MAX)
+      if (encoder.PutUnsigned(offset, addr_byte_size, file_addr) == UINT32_MAX)
         return false;
 
       // All went well, so now we can reset the data using a shared pointer to
@@ -583,8 +583,8 @@ bool DWARFExpression::LinkThreadLocalStorage(
         if (linked_file_addr == LLDB_INVALID_ADDRESS)
           return false;
         // Replace the address in the new buffer
-        if (encoder.PutMaxU64(const_offset, const_byte_size,
-                              linked_file_addr) == UINT32_MAX)
+        if (encoder.PutUnsigned(const_offset, const_byte_size,
+                                linked_file_addr) == UINT32_MAX)
           return false;
       }
       break;
@@ -636,6 +636,11 @@ bool DWARFExpression::LocationListContainsAddress(
       if (lo_pc == 0 && hi_pc == 0)
         break;
 
+      if ((m_data.GetAddressByteSize() == 4 && (lo_pc == UINT32_MAX)) ||
+          (m_data.GetAddressByteSize() == 8 && (lo_pc == UINT64_MAX))) {
+        loclist_base_addr = hi_pc + m_loclist_slide;
+        continue;
+      }
       lo_pc += loclist_base_addr - m_loclist_slide;
       hi_pc += loclist_base_addr - m_loclist_slide;
 
@@ -670,6 +675,12 @@ bool DWARFExpression::GetLocation(addr_t base_addr, addr_t pc,
 
       if (lo_pc == 0 && hi_pc == 0)
         break;
+
+      if ((m_data.GetAddressByteSize() == 4 && (lo_pc == UINT32_MAX)) ||
+          (m_data.GetAddressByteSize() == 8 && (lo_pc == UINT64_MAX))) {
+        curr_base_addr = hi_pc + m_loclist_slide;
+        continue;
+      }
 
       lo_pc += curr_base_addr - m_loclist_slide;
       hi_pc += curr_base_addr - m_loclist_slide;
@@ -967,6 +978,13 @@ bool DWARFExpression::Evaluate(ExecutionContext *exe_ctx,
         if (lo_pc == 0 && hi_pc == 0)
           break;
 
+        if ((m_data.GetAddressByteSize() == 4 &&
+             (lo_pc == UINT32_MAX)) ||
+            (m_data.GetAddressByteSize() == 8 &&
+             (lo_pc == UINT64_MAX))) {
+          curr_loclist_base_load_addr = hi_pc + m_loclist_slide;
+          continue;
+        }
         lo_pc += curr_loclist_base_load_addr - m_loclist_slide;
         hi_pc += curr_loclist_base_load_addr - m_loclist_slide;
 

@@ -46,6 +46,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
@@ -162,6 +163,11 @@ void BranchFolder::RemoveDeadBlock(MachineBasicBlock *MBB) {
   // Avoid matching if this pointer gets reused.
   TriedMerging.erase(MBB);
 
+  // Update call site info.
+  std::for_each(MBB->begin(), MBB->end(), [MF](const MachineInstr &MI) {
+    if (MI.isCall(MachineInstr::IgnoreBundle))
+      MF->eraseCallSiteInfo(&MI);
+  });
   // Remove the block.
   MF->erase(MBB);
   EHScopeMembership.erase(MBB);
@@ -397,11 +403,12 @@ SkipTopCFIAndReturn:
   // the CFI instruction. Later on, this leads to BB2 being 'hacked off' at the
   // wrong place (in ReplaceTailWithBranchTo()) which results in losing this CFI
   // instruction.
-  while (I1 != MBB1->end() && I1->isCFIInstruction()) {
+  // Skip CFI_INSTRUCTION and debugging instruction; necessary to avoid changing the code.
+  while (I1 != MBB1->end() && !countsAsInstruction(*I1)) {
     ++I1;
   }
 
-  while (I2 != MBB2->end() && I2->isCFIInstruction()) {
+  while (I2 != MBB2->end() && !countsAsInstruction(*I2)) {
     ++I2;
   }
 
