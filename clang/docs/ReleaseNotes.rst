@@ -394,6 +394,10 @@ clang-format
   in variable and parameter declarations to be ``Right/East`` const or ``Left/West`` 
   const .
 
+- Option ``ConstPlacement`` has been added in order to auto-arrange the positioning of `const`
+  in variable and parameter declarations to be either ``Right/East`` const or ``Left/West`` 
+  const .
+
 libclang
 --------
 

@@ -22,18 +22,24 @@
 namespace clang {
 namespace format {
 
+static void replaceToken(const SourceManager &SourceMgr,
+                         tooling::Replacements &Fixes,
+                         const CharSourceRange &Range, std::string NewText) {
+  auto Replacement = tooling::Replacement(SourceMgr, Range, NewText);
+  auto Err = Fixes.add(Replacement);
+
+  if (Err) {
+    llvm::errs() << "Error while rearranging const : "
+                 << llvm::toString(std::move(Err)) << "\n";
+  }
+}
+
 static void removeToken(const SourceManager &SourceMgr,
                         tooling::Replacements &Fixes,
                         const FormatToken *First) {
   auto Range = CharSourceRange::getCharRange(First->getStartOfNonWhitespace(),
                                              First->Tok.getEndLoc());
-
-  auto Err = Fixes.add(tooling::Replacement(SourceMgr, Range, ""));
-
-  if (Err) {
-    llvm::errs() << "Error while removing const : "
-                 << llvm::toString(std::move(Err)) << "\n";
-  }
+  replaceToken(SourceMgr, Fixes, Range, "");
 }
 
 static void insertConstAfter(const SourceManager &SourceMgr,
@@ -49,13 +55,7 @@ static void insertConstAfter(const SourceManager &SourceMgr,
   std::string NewText = " const ";
   NewText += Next->TokenText;
 
-  auto Replacement = tooling::Replacement(SourceMgr, Range, NewText);
-  auto Err = Fixes.add(Replacement);
-
-  if (Err) {
-    llvm::errs() << "Error while rearranging const : "
-                 << llvm::toString(std::move(Err)) << "\n";
-  }
+  replaceToken(SourceMgr, Fixes, Range, NewText);
 }
 
 static void insertConstBefore(const SourceManager &SourceMgr,
@@ -67,121 +67,62 @@ static void insertConstBefore(const SourceManager &SourceMgr,
   std::string NewText = " const ";
   NewText += First->TokenText;
 
-  auto Err = Fixes.add(tooling::Replacement(SourceMgr, Range, NewText));
-
-  if (Err) {
-    llvm::errs() << "Error while rearranging const : "
-                 << llvm::toString(std::move(Err)) << "\n";
-  }
+  replaceToken(SourceMgr, Fixes, Range, NewText);
 }
 
-static void swapTwoTokens(const SourceManager &SourceMgr,
-                               tooling::Replacements &Fixes,
-                               const FormatToken *First,
-                               const FormatToken *Second) {
-  // Change `const int` to be `int const`.
-  std::string NewType;
-  NewType += Second->TokenText;
-  NewType += " ";
-  NewType += First->TokenText;
-  auto Range = CharSourceRange::getCharRange(First->getStartOfNonWhitespace(),
-                                             Second->Tok.getEndLoc());
-
-  auto Err = Fixes.add(tooling::Replacement(SourceMgr, Range, NewType));
-
-  if (Err) {
-    llvm::errs() << "Error while rearranging const : "
-                 << llvm::toString(std::move(Err)) << "\n";
+static void rotateTokens(const SourceManager &SourceMgr,
+                         tooling::Replacements &Fixes, const FormatToken *First,
+                         const FormatToken *Last, bool Left) {
+  auto *End = Last;
+  auto *Begin = First;
+  if (!Left) {
+    End = Last->Next;
+    Begin = First->Next;
   }
-}
 
-static void swapThreeTokens(const SourceManager &SourceMgr,
-                                 tooling::Replacements &Fixes,
-                                 const FormatToken *First,
-                                 const FormatToken *Second,
-                                 const FormatToken *Third, bool West) {
-  // e.g. Change `const unsigned char` to be `unsigned char const`.
-  std::string NewType;
-  if (West) {
-    NewType += Third->TokenText;
-    NewType += " ";
-    NewType += First->TokenText;
-    NewType += " ";
-    NewType += Second->TokenText;
-  } else {
-    NewType += Second->TokenText;
-    NewType += " ";
-    NewType += Third->TokenText;
-    NewType += " ";
-    NewType += First->TokenText;
+  std::string NewText;
+  // If we are rotating to the left we move the Last token to the front.
+  if (Left) {
+    NewText += Last->TokenText;
+    NewText += " ";
+  }
+
+  // Then move through the other tokens.
+  auto *Tok = Begin;
+  while (Tok != End) {
+    if (!NewText.empty())
+      NewText += " ";
+
+    NewText += Tok->TokenText;
+    Tok = Tok->Next;
+  }
+
+  // If we are rotating to the right we move the first token to the back.
+  if (!Left) {
+    NewText += " ";
+    NewText += First->TokenText;
   }
 
   auto Range = CharSourceRange::getCharRange(First->getStartOfNonWhitespace(),
-                                             Third->Tok.getEndLoc());
+                                             Last->Tok.getEndLoc());
 
-  auto Err = Fixes.add(tooling::Replacement(SourceMgr, Range, NewType));
-
-  if (Err) {
-    llvm::errs() << "Error while rearranging const : "
-                 << llvm::toString(std::move(Err)) << "\n";
-  }
-}
-
-static void swapFourTokens(const SourceManager &SourceMgr,
-                                 tooling::Replacements &Fixes,
-                                 const FormatToken *First,
-                                 const FormatToken *Second,
-                                 const FormatToken *Third, 
-                                 const FormatToken *Fourth, 
-                                 bool West) {
-  // e.g. Change `const unsigned long long` to be `unsigned long long const`.
-  std::string NewType;
-  if (West) {
-    NewType += Fourth->TokenText;
-    NewType += " ";
-    NewType += First->TokenText;
-    NewType += " ";
-    NewType += Second->TokenText;
-    NewType += " ";
-    NewType += Third->TokenText;
-  } else {
-    NewType += Second->TokenText;
-    NewType += " ";
-    NewType += Third->TokenText;
-    NewType += " ";
-    NewType += Fourth->TokenText;
-    NewType += " ";
-    NewType += First->TokenText;
-  }
-
-  auto Range = CharSourceRange::getCharRange(First->getStartOfNonWhitespace(),
-                                             Fourth->Tok.getEndLoc());
-
-  auto Err = Fixes.add(tooling::Replacement(SourceMgr, Range, NewType));
-
-  if (Err) {
-    llvm::errs() << "Error while rearranging const : "
-                 << llvm::toString(std::move(Err)) << "\n";
-  }
+  replaceToken(SourceMgr, Fixes, Range, NewText);
 }
 
 static bool isCVQualifierOrType(const FormatToken *Tok) {
-  if (!Tok)
-    return false;
-  return (Tok->isSimpleTypeSpecifier() ||
-          Tok->isOneOf(tok::kw_volatile, tok::kw_auto));
+  return Tok && (Tok->isSimpleTypeSpecifier() ||
+                 Tok->isOneOf(tok::kw_volatile, tok::kw_auto));
 }
 
-// If a token is an identifier and its upper case it could
-// be a macro and hence we need to be able to ignore it
-static bool isPossibleMacro(const FormatToken *Tok)
-{
+// If a token is an identifier and it's upper case, it could
+// be a macro and hence we need to be able to ignore it.
+static bool isPossibleMacro(const FormatToken *Tok) {
   if (!Tok)
     return false;
 
   if (!Tok->is(tok::identifier))
-    return false;  
-  
+    return false;
+
   if (Tok->TokenText.upper() == Tok->TokenText.str())
     return true;
 
@@ -196,37 +137,28 @@ static FormatToken *analyzeEast(const SourceManager &SourceMgr,
   if (!Tok->is(tok::kw_const)) {
     return Tok;
   }
-  // Don't concern youself if nothing follows const.
+  // Don't concern yourself if nothing follows const.
   if (!Tok->Next) {
     return Tok;
   }
-  if (isPossibleMacro(Tok->Next)){
+  if (isPossibleMacro(Tok->Next)) {
     return Tok;
   }
   FormatToken *Const = Tok;
 
-  if (isCVQualifierOrType(Tok->Next) && isCVQualifierOrType(Tok->Next->Next) && isCVQualifierOrType(Tok->Next->Next->Next)) {
-    swapFourTokens(SourceMgr, Fixes, Tok, Tok->Next, Tok->Next->Next, Tok->Next->Next->Next,
-                         /*West=*/false);
-    Tok = Tok->Next->Next->Next;
+  FormatToken *Qualifier = Tok->Next;
+  FormatToken *LastQualifier = Qualifier;
+  while (Qualifier && isCVQualifierOrType(Qualifier)) {
+    LastQualifier = Qualifier;
+    Qualifier = Qualifier->Next;
   }
-  if (isCVQualifierOrType(Tok->Next) && Tok->Next->Next &&
-      isCVQualifierOrType(Tok->Next->Next)) {
-    // The unsigned/signed case  `const unsigned int` -> `unsigned int
-    // const`.
-    swapThreeTokens(SourceMgr, Fixes, Tok, Tok->Next, Tok->Next->Next,
-                         /*West=*/false);
-    Tok = Tok->Next->Next;
-  } 
-  else if (Tok->Next->isSimpleTypeSpecifier() ||
-             Tok->Next->is(tok::kw_auto)) {
-    // The basic case  `const int` -> `int const`
-    swapTwoTokens(SourceMgr, Fixes, Tok, Tok->Next);
-
+  if (LastQualifier && Qualifier != LastQualifier) {
+    rotateTokens(SourceMgr, Fixes, Const, LastQualifier, /*Left=*/false);
+    Tok = LastQualifier;
   } else if (Tok->startsSequence(tok::kw_const, tok::identifier,
                                  TT_TemplateOpener)) {
-    // Read from to the end of the TemplateOpener to
-    // TemplateCloser const ArrayRef<int> a; const ArrayRef<int> &a;
+    // Read from the TemplateOpener to
+    // TemplateCloser as in const ArrayRef<int> a; const ArrayRef<int> &a;
     FormatToken *EndTemplate = Tok->Next->Next->MatchingParen;
     if (EndTemplate) {
       // Move to the end of any template class members e.g.
@@ -241,7 +173,6 @@ static FormatToken *analyzeEast(const SourceManager &SourceMgr,
       // Remove the const.
       insertConstAfter(SourceMgr, Fixes, EndTemplate);
       removeToken(SourceMgr, Fixes, Tok);
-      //return EndTemplate->Next;
       return Tok;
     }
   } else if (Tok->startsSequence(tok::kw_const, tok::identifier)) {
@@ -282,44 +213,39 @@ static FormatToken *analyzeEast(const SourceManager &SourceMgr,
 static FormatToken *analyzeWest(const SourceManager &SourceMgr,
                                 const AdditionalKeywords &Keywords,
                                 tooling::Replacements &Fixes,
-                                FormatToken *Tok) {                                  
+                                FormatToken *Tok) {
   // if Tok is an identifier and possibly a macro then don't convert
-  if (isPossibleMacro(Tok)){
-      return Tok;
+  if (isPossibleMacro(Tok)) {
+    return Tok;
   }
-  if (isCVQualifierOrType(Tok) && isCVQualifierOrType(Tok->Next) && isCVQualifierOrType(Tok->Next->Next) &&
-    // `unsigned longl long const` -> `const unsigned long long`.
-      Tok->Next->Next->Next && Tok->Next->Next->Next->is(tok::kw_const)) {
-    swapFourTokens(SourceMgr, Fixes, Tok, Tok->Next, Tok->Next, Tok->Next->Next->Next,
-                         /*West=*/true);
-    Tok = Tok->Next->Next->Next;
+
+  FormatToken *Qualifier = Tok;
+  FormatToken *LastQualifier = Qualifier;
+  while (Qualifier && isCVQualifierOrType(Qualifier)) {
+    LastQualifier = Qualifier;
+    Qualifier = Qualifier->Next;
+    if (Qualifier && Qualifier->is(tok::kw_const)) {
+      break;
+    }
   }
-  else if (isCVQualifierOrType(Tok) && isCVQualifierOrType(Tok->Next) &&
-      Tok->Next->Next && Tok->Next->Next->is(tok::kw_const)) {
-    // `unsigned int const` -> `const unsigned int`.
-    swapThreeTokens(SourceMgr, Fixes, Tok, Tok->Next, Tok->Next->Next,
-                         /*West=*/true);
-    Tok = Tok->Next->Next;
-  }   
-  else if ((Tok->isSimpleTypeSpecifier() || Tok->is(tok::kw_auto)) &&
-             Tok->Next->is(tok::kw_const)) {
-    // The basic case  `int const` -> `const int`.
-    swapTwoTokens(SourceMgr, Fixes, Tok, Tok->Next);
+  if (LastQualifier && Qualifier != LastQualifier &&
+      Qualifier->is(tok::kw_const)) {
+    rotateTokens(SourceMgr, Fixes, Tok, Qualifier, /*Left=*/true);
+    Tok = Qualifier->Next;
   } else if (Tok->startsSequence(tok::identifier, tok::kw_const)) {
     if (Tok->Next->Next && Tok->Next->Next->isOneOf(tok::identifier, tok::star,
                                                     tok::amp, tok::ampamp)) {
       // Don't swap `::iterator const` to `::const iterator`.
       if (!Tok->Previous ||
           (Tok->Previous && !Tok->Previous->is(tok::coloncolon))) {
-        swapTwoTokens(SourceMgr, Fixes, Tok, Tok->Next);
+        rotateTokens(SourceMgr, Fixes, Tok, Tok->Next, /*Left=*/true);
       }
     }
   }
   if (Tok->is(TT_TemplateOpener) && Tok->Next &&
-      (Tok->Next->is(tok::identifier) || Tok->Next->isSimpleTypeSpecifier()) && Tok->Next->Next &&
-      Tok->Next->Next->is(tok::kw_const))
-  {
-    swapTwoTokens(SourceMgr, Fixes, Tok->Next, Tok->Next->Next);
+      (Tok->Next->is(tok::identifier) || Tok->Next->isSimpleTypeSpecifier()) &&
+      Tok->Next->Next && Tok->Next->Next->is(tok::kw_const)) {
+    rotateTokens(SourceMgr, Fixes, Tok->Next, Tok->Next->Next, /*Left=*/true);
   }
   if (Tok->startsSequence(tok::identifier) && Tok->Next) {
     if (Tok->Previous &&
@@ -376,15 +302,11 @@ EastWestConstFixer::analyze(TokenAnnotator &Annotator,
   AffectedRangeMgr.computeAffectedLines(AnnotatedLines);
 
   for (size_t I = 0, E = AnnotatedLines.size(); I != E; ++I) {
-    auto *Tok = AnnotatedLines[I]->First;
+    FormatToken *First = AnnotatedLines[I]->First;
     const auto *Last = AnnotatedLines[I]->Last;
 
-    while (Tok && Tok != Last) {
-      if (!Tok->Next) {
-        break;
-      }
+    for (auto *Tok = First; Tok && Tok != Last && Tok->Next; Tok = Tok->Next) {
       if (Tok->is(tok::comment)) {
-        Tok = Tok->Next;
         continue;
       }
       if (Style.ConstPlacement == FormatStyle::CS_East) {
@@ -392,7 +314,6 @@ EastWestConstFixer::analyze(TokenAnnotator &Annotator,
       } else if (Style.ConstPlacement == FormatStyle::CS_West) {
         Tok = analyzeWest(SourceMgr, Keywords, Fixes, Tok);
       }
-      Tok = Tok->Next;
     }
   }
   return {Fixes, 0};

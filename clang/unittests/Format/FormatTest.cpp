@@ -16617,7 +16617,6 @@ TEST_F(FormatTest, EastConst) {
   FormatStyle Style = getLLVMStyle();
   Style.ConstPlacement = FormatStyle::CS_East;
 
-  
   verifyFormat("int const a;", Style);
   verifyFormat("int const *a;", Style);
   verifyFormat("int const &a;", Style);
@@ -16748,21 +16747,22 @@ TEST_F(FormatTest, EastConst) {
 
   verifyFormat("Foo<Foo<int> const> P;\n#if 0\n#else\n#endif",
                "Foo<const Foo<int>> P;\n#if 0\n#else\n#endif", Style);
- 
+
   verifyFormat("Bar<Bar<int const> const> P;\n#if 0\n#else\n#endif",
                "Bar<Bar<const int> const> P;\n#if 0\n#else\n#endif", Style);
 
   verifyFormat("Baz<Baz<int const> const> P;\n#if 0\n#else\n#endif",
                "Baz<const Baz<const int>> P;\n#if 0\n#else\n#endif", Style);
 
-  //verifyFormat("#if 0\nBoo<Boo<int const> const> P;\n#else\n#endif",
+  // verifyFormat("#if 0\nBoo<Boo<int const> const> P;\n#else\n#endif",
   //             "#if 0\nBoo<const Boo<const int>> P;\n#else\n#endif", Style);
 
   verifyFormat("int const P;\n#if 0\n#else\n#endif",
                "const int P;\n#if 0\n#else\n#endif", Style);
 
   verifyFormat("unsigned long const a;", "const unsigned long a;", Style);
-  verifyFormat("unsigned long long const a;", "const unsigned long long a;", Style);
+  verifyFormat("unsigned long long const a;", "const unsigned long long a;",
+               Style);
 
   // don't adjust macros
   verifyFormat("const INTPTR a;", "const INTPTR a;", Style);
@@ -16814,11 +16814,11 @@ TEST_F(FormatTest, WestConst) {
   verifyFormat("const unsigned int &get_nu() const",
                "unsigned int const &get_nu() const", Style);
 
-  verifyFormat("volatile const int;", "volatile const int;", Style);
+  verifyFormat("const volatile int;", "volatile const int;", Style);
   verifyFormat("const volatile int;", "const volatile int;", Style);
   verifyFormat("const int volatile;", "const int volatile;", Style);
 
-  verifyFormat("volatile const int *restrict;", "volatile const int *restrict;",
+  verifyFormat("const volatile int *restrict;", "volatile const int *restrict;",
                Style);
   verifyFormat("const volatile int *restrict;", "const volatile int *restrict;",
                Style);
@@ -16893,7 +16893,11 @@ TEST_F(FormatTest, WestConst) {
                "int const P;\n#if 0\n#else\n#endif", Style);
 
   verifyFormat("const unsigned long a;", "unsigned long const a;", Style);
-  verifyFormat("const unsigned long long a;", "unsigned long long const a;", Style);
+  verifyFormat("const unsigned long long a;", "unsigned long long const a;",
+               Style);
+
+  verifyFormat("const long long unsigned a;", "long const long unsigned a;",
+               Style);
 
   // don't adjust macros
   verifyFormat("INTPTR const a;", "INTPTR const a;", Style);
