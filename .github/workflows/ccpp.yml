@@ -1,0 +1,23 @@
+name: C/C++ CI
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+        matrix:
+          os: [ubuntu-latest,macos-latest]
+    steps:
+      - uses: actions/checkout@v1
+      - name: build
+        run: | 
+            mkdir build
+            cd build
+            pwd
+            ls -al
+            ls -al ..
+            cmake -G "Ninja" ../llvm -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_BUILD_TYPE=Release
+            ninja clang-format
+            ninja FormatTests
+
