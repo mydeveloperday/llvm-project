@@ -7,7 +7,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
         matrix:
-          os: [ubuntu-latest,windows-latest]
+          os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v1
       - name: build
@@ -15,9 +15,7 @@ jobs:
             mkdir build
             cd build
             pwd
-            ls -al
-            ls -al ..
-            cmake -G "Ninja" ../llvm -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_BUILD_TYPE=Release
-            ninja clang-format
-            ninja FormatTests
+            cmake -G "Unix Makefiles" ../llvm -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_BUILD_TYPE=Release
+            make clang-format -j4
+            make FormatTests -j4
 
