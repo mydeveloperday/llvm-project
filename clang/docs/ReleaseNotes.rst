@@ -390,6 +390,10 @@ clang-format
         foo();
       } while(1);
 
+- Option ``ConstPlacement`` has been added auto-arrange the positioning of const
+  in variable and parameter declarations to be ``Right/East`` const or ``Left/West`` 
+  const .
+
 libclang
 --------
 

@@ -1223,6 +1223,31 @@ struct FormatStyle {
   /// \endcode
   std::string CommentPragmas;
 
+  /// Different const alignment styles.
+  enum ConstPlacementStyle {
+    /// Don't change const to either East/Right const or West/Left const.
+    /// \code
+    ///    int const a;
+    ///    const int *a;
+    /// \endcode
+    CS_Leave,
+    /// Change type decorations to be West/Left const.
+    /// \code
+    ///    const int a;
+    ///    const int *a;
+    /// \endcode
+    CS_West,
+    /// Change type decorations to be East/Right const.
+    /// \code
+    ///    int const a;
+    ///    int const *a;
+    /// \endcode
+    CS_East
+  };
+
+  /// Different ways to arrange const.
+  ConstPlacementStyle ConstPlacement;
+
   /// Different ways to break inheritance list.
   enum BreakInheritanceListStyle {
     /// Break inheritance list before the colon and after the commas.
@@ -2317,6 +2342,7 @@ struct FormatStyle {
            BreakAfterJavaFieldAnnotations == R.BreakAfterJavaFieldAnnotations &&
            BreakStringLiterals == R.BreakStringLiterals &&
            ColumnLimit == R.ColumnLimit && CommentPragmas == R.CommentPragmas &&
+           ConstPlacement == R.ConstPlacement &&
            BreakInheritanceList == R.BreakInheritanceList &&
            ConstructorInitializerAllOnOneLineOrOnePerLine ==
                R.ConstructorInitializerAllOnOneLineOrOnePerLine &&

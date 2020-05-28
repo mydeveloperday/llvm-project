@@ -1470,6 +1470,37 @@ the configuration (without a prefix: ``Auto``).
     namespace Extra {
     }}}
 
+**ConstPlacement** (``ConstPlacementStyle``)
+  Different ways to arrange const.
+
+  Possible values:
+
+  * ``CS_Leave`` (in configuration: ``Leave``)
+    Don't change const to either East/Right const or West/Left const.
+
+    .. code-block:: c++
+
+       int const a;
+       const int *a;
+
+  * ``CS_West`` (in configuration: ``West``)
+    Change type decorations to be West/Left const.
+
+    .. code-block:: c++
+
+       const int a;
+       const int *a;
+
+  * ``CS_East`` (in configuration: ``East``)
+    Change type decorations to be East/Right const.
+
+    .. code-block:: c++
+
+       int const a;
+       int const *a;
+
+
+
 **ConstructorInitializerAllOnOneLineOrOnePerLine** (``bool``)
   If the constructor initializers don't fit on a line, put each
   initializer on its own line.

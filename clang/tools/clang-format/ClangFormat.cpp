@@ -19,6 +19,7 @@
 #include "clang/Basic/Version.h"
 #include "clang/Format/Format.h"
 #include "clang/Rewrite/Core/Rewriter.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -103,6 +104,12 @@ static cl::opt<bool> SortIncludes(
     cl::desc("If set, overrides the include sorting behavior determined by the "
              "SortIncludes style flag"),
     cl::cat(ClangFormatCategory));
+
+static cl::opt<std::string> ConstPlacement(
+    "const-placement",
+    cl::desc("If set, overrides the const style behavior determined by the "
+             "ConstPlacement style flag"),
+    cl::init(""), cl::cat(ClangFormatCategory));
 
 static cl::opt<bool>
     Verbose("verbose", cl::desc("If set, shows the list of processed files"),
@@ -383,6 +390,14 @@ static bool format(StringRef FileName) {
     llvm::errs() << llvm::toString(FormatStyle.takeError()) << "\n";
     return true;
   }
+
+  StringRef ConstAlignment = ConstPlacement;
+
+  FormatStyle->ConstPlacement =
+      StringSwitch<FormatStyle::ConstPlacementStyle>(ConstAlignment.lower())
+          .Cases("right", "east", FormatStyle::CS_East)
+          .Cases("left", "west", FormatStyle::CS_West)
+          .Default(FormatStyle->ConstPlacement);
 
   if (SortIncludes.getNumOccurrences() != 0)
     FormatStyle->SortIncludes = SortIncludes;

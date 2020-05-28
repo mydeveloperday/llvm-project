@@ -15,6 +15,7 @@
 #include "clang/Format/Format.h"
 #include "AffectedRangeManager.h"
 #include "ContinuationIndenter.h"
+#include "EastWestConstFixer.h"
 #include "FormatInternal.h"
 #include "FormatTokenLexer.h"
 #include "NamespaceEndCommentsFixer.h"
@@ -112,6 +113,17 @@ template <> struct ScalarEnumerationTraits<FormatStyle::ShortBlockStyle> {
     IO.enumCase(Value, "Always", FormatStyle::SBS_Always);
     IO.enumCase(Value, "true", FormatStyle::SBS_Always);
     IO.enumCase(Value, "Empty", FormatStyle::SBS_Empty);
+  }
+};
+
+template <> struct ScalarEnumerationTraits<FormatStyle::ConstPlacementStyle> {
+  static void enumeration(IO &IO, FormatStyle::ConstPlacementStyle &Value) {
+    IO.enumCase(Value, "Leave", FormatStyle::CS_Leave);
+    IO.enumCase(Value, "West", FormatStyle::CS_West);
+    IO.enumCase(Value, "East", FormatStyle::CS_East);
+
+    IO.enumCase(Value, "Left", FormatStyle::CS_West);
+    IO.enumCase(Value, "Right", FormatStyle::CS_East);
   }
 };
 
@@ -500,6 +512,7 @@ template <> struct MappingTraits<FormatStyle> {
     IO.mapOptional("BreakStringLiterals", Style.BreakStringLiterals);
     IO.mapOptional("ColumnLimit", Style.ColumnLimit);
     IO.mapOptional("CommentPragmas", Style.CommentPragmas);
+    IO.mapOptional("ConstPlacement", Style.ConstPlacement);
     IO.mapOptional("CompactNamespaces", Style.CompactNamespaces);
     IO.mapOptional("ConstructorInitializerAllOnOneLineOrOnePerLine",
                    Style.ConstructorInitializerAllOnOneLineOrOnePerLine);
@@ -857,6 +870,7 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
   LLVMStyle.BreakStringLiterals = true;
   LLVMStyle.ColumnLimit = 80;
   LLVMStyle.CommentPragmas = "^ IWYU pragma:";
+  LLVMStyle.ConstPlacement = FormatStyle::CS_Leave;
   LLVMStyle.CompactNamespaces = false;
   LLVMStyle.ConstructorInitializerAllOnOneLineOrOnePerLine = false;
   LLVMStyle.ConstructorInitializerIndentWidth = 4;
@@ -1041,6 +1055,7 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
     // taze:, triple slash directives (`/// <...`), tslint:, and @see, which is
     // commonly followed by overlong URLs.
     GoogleStyle.CommentPragmas = "(taze:|^/[ \t]*<|tslint:|@see)";
+    GoogleStyle.ConstPlacement = FormatStyle::CS_Leave;
     // TODO: enable once decided, in particular re disabling bin packing.
     // https://google.github.io/styleguide/jsguide.html#features-arrays-trailing-comma
     // GoogleStyle.InsertTrailingCommas = FormatStyle::TCS_Wrapped;
@@ -1095,6 +1110,7 @@ FormatStyle getChromiumStyle(FormatStyle::LanguageKind Language) {
   //   _prepend that with a comment_ to prevent it" before changing behavior.
   ChromiumStyle.IncludeStyle.IncludeBlocks =
       tooling::IncludeStyle::IBS_Preserve;
+  ChromiumStyle.ConstPlacement = FormatStyle::CS_Leave;
 
   if (Language == FormatStyle::LK_Java) {
     ChromiumStyle.AllowShortIfStatementsOnASingleLine =
@@ -1156,6 +1172,7 @@ FormatStyle getMozillaStyle() {
   MozillaStyle.PenaltyReturnTypeOnItsOwnLine = 200;
   MozillaStyle.PointerAlignment = FormatStyle::PAS_Left;
   MozillaStyle.SpaceAfterTemplateKeyword = false;
+  MozillaStyle.ConstPlacement = FormatStyle::CS_Leave;
   return MozillaStyle;
 }
 
@@ -1179,6 +1196,7 @@ FormatStyle getWebKitStyle() {
   Style.PointerAlignment = FormatStyle::PAS_Left;
   Style.SpaceBeforeCpp11BracedList = true;
   Style.SpaceInEmptyBlock = true;
+  Style.ConstPlacement = FormatStyle::CS_Leave;
   return Style;
 }
 
@@ -1194,6 +1212,7 @@ FormatStyle getGNUStyle() {
   Style.FixNamespaceComments = false;
   Style.SpaceBeforeParens = FormatStyle::SBPO_Always;
   Style.Standard = FormatStyle::LS_Cpp03;
+  Style.ConstPlacement = FormatStyle::CS_Leave;
   return Style;
 }
 
@@ -1224,6 +1243,7 @@ FormatStyle getMicrosoftStyle(FormatStyle::LanguageKind Language) {
   Style.AllowShortLoopsOnASingleLine = false;
   Style.AlwaysBreakAfterDefinitionReturnType = FormatStyle::DRTBS_None;
   Style.AlwaysBreakAfterReturnType = FormatStyle::RTBS_None;
+  Style.ConstPlacement = FormatStyle::CS_Leave;
   return Style;
 }
 
@@ -1232,6 +1252,7 @@ FormatStyle getNoStyle() {
   NoStyle.DisableFormat = true;
   NoStyle.SortIncludes = false;
   NoStyle.SortUsingDeclarations = false;
+  NoStyle.ConstPlacement = FormatStyle::CS_Leave;
   return NoStyle;
 }
 
@@ -2598,6 +2619,11 @@ reformat(const FormatStyle &Style, StringRef Code,
         return UsingDeclarationsSorter(Env, Expanded).process();
       });
   }
+
+  if (Style.isCpp() && Style.ConstPlacement != FormatStyle::CS_Leave)
+    Passes.emplace_back([&](const Environment &Env) {
+      return EastWestConstFixer(Env, Expanded).process();
+    });
 
   if (Style.Language == FormatStyle::LK_JavaScript &&
       Style.JavaScriptQuotes != FormatStyle::JSQS_Leave)

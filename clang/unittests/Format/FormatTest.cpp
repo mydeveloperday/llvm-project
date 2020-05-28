@@ -13628,6 +13628,13 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE("ContinuationIndentWidth: 11", ContinuationIndentWidth, 11u);
   CHECK_PARSE("CommentPragmas: '// abc$'", CommentPragmas, "// abc$");
 
+  Style.ConstPlacement = FormatStyle::CS_West;
+  CHECK_PARSE("ConstPlacement: Leave", ConstPlacement, FormatStyle::CS_Leave);
+  CHECK_PARSE("ConstPlacement: East", ConstPlacement, FormatStyle::CS_East);
+  CHECK_PARSE("ConstPlacement: West", ConstPlacement, FormatStyle::CS_West);
+  CHECK_PARSE("ConstPlacement: Right", ConstPlacement, FormatStyle::CS_East);
+  CHECK_PARSE("ConstPlacement: Left", ConstPlacement, FormatStyle::CS_West);
+
   Style.PointerAlignment = FormatStyle::PAS_Middle;
   CHECK_PARSE("PointerAlignment: Left", PointerAlignment,
               FormatStyle::PAS_Left);
@@ -16572,6 +16579,326 @@ TEST_F(FormatTest, WebKitDefaultStyle) {
                "}",
                Style);
 }
+
+TEST_F(FormatTest, EastWestConst) {
+  FormatStyle Style = getLLVMStyle();
+
+  // keep the const style unaltered
+  verifyFormat("const int a;", Style);
+  verifyFormat("const int *a;", Style);
+  verifyFormat("const int &a;", Style);
+  verifyFormat("const int &&a;", Style);
+  verifyFormat("int const b;", Style);
+  verifyFormat("int const *b;", Style);
+  verifyFormat("int const &b;", Style);
+  verifyFormat("int const &&b;", Style);
+  verifyFormat("int const *b const;", Style);
+  verifyFormat("int *const c;", Style);
+
+  verifyFormat("const Foo a;", Style);
+  verifyFormat("const Foo *a;", Style);
+  verifyFormat("const Foo &a;", Style);
+  verifyFormat("const Foo &&a;", Style);
+  verifyFormat("Foo const b;", Style);
+  verifyFormat("Foo const *b;", Style);
+  verifyFormat("Foo const &b;", Style);
+  verifyFormat("Foo const &&b;", Style);
+  verifyFormat("Foo const *b const;", Style);
+
+  verifyFormat("LLVM_NODISCARD const int &Foo();", Style);
+  verifyFormat("LLVM_NODISCARD int const &Foo();", Style);
+
+  verifyFormat("volatile const int *restrict;", Style);
+  verifyFormat("const volatile int *restrict;", Style);
+  verifyFormat("const int volatile *restrict;", Style);
+}
+
+TEST_F(FormatTest, EastConst) {
+  FormatStyle Style = getLLVMStyle();
+  Style.ConstPlacement = FormatStyle::CS_East;
+
+  
+  verifyFormat("int const a;", Style);
+  verifyFormat("int const *a;", Style);
+  verifyFormat("int const &a;", Style);
+  verifyFormat("int const &&a;", Style);
+  verifyFormat("int const b;", Style);
+  verifyFormat("int const *b;", Style);
+  verifyFormat("int const &b;", Style);
+  verifyFormat("int const &&b;", Style);
+  verifyFormat("int const *b const;", Style);
+  verifyFormat("int *const c;", Style);
+
+  verifyFormat("Foo const a;", Style);
+  verifyFormat("Foo const *a;", Style);
+  verifyFormat("Foo const &a;", Style);
+  verifyFormat("Foo const &&a;", Style);
+  verifyFormat("Foo const b;", Style);
+  verifyFormat("Foo const *b;", Style);
+  verifyFormat("Foo const &b;", Style);
+  verifyFormat("Foo const &&b;", Style);
+  verifyFormat("Foo const *b const;", Style);
+  verifyFormat("Foo *const b;", Style);
+  verifyFormat("Foo const *const b;", Style);
+  verifyFormat("auto const v = get_value();", Style);
+  verifyFormat("long long const &a;", Style);
+  verifyFormat("unsigned char const *a;", Style);
+  verifyFormat("int main(int const argc, char const *const *const argv)",
+               Style);
+
+  verifyFormat("LLVM_NODISCARD int const &Foo();", Style);
+  verifyFormat("SourceRange getSourceRange() const override LLVM_READONLY",
+               Style);
+  verifyFormat("void foo() const override;", Style);
+  verifyFormat("void foo() const override LLVM_READONLY;", Style);
+  verifyFormat("void foo() const final;", Style);
+  verifyFormat("void foo() const final LLVM_READONLY;", Style);
+  verifyFormat("void foo() const LLVM_READONLY;", Style);
+
+  verifyFormat(
+      "template <typename Func> explicit Action(Action<Func> const &action);",
+      Style);
+  verifyFormat(
+      "template <typename Func> explicit Action(Action<Func> const &action);",
+      "template <typename Func> explicit Action(const Action<Func>& action);",
+      Style);
+  verifyFormat(
+      "template <typename Func> explicit Action(Action<Func> const &action);",
+      "template <typename Func>\nexplicit Action(const Action<Func>& action);",
+      Style);
+
+  verifyFormat("int const a;", "const int a;", Style);
+  verifyFormat("int const *a;", "const int *a;", Style);
+  verifyFormat("int const &a;", "const int &a;", Style);
+  verifyFormat("foo(int const &a)", "foo(const int &a)", Style);
+  verifyFormat("unsigned char *a;", "unsigned char *a;", Style);
+  verifyFormat("unsigned char const *a;", "const unsigned char *a;", Style);
+  verifyFormat("vector<int, int const, int &, int const &> args1",
+               "vector<int, const int, int &, const int &> args1", Style);
+  verifyFormat("unsigned int const &get_nu() const",
+               "const unsigned int &get_nu() const", Style);
+  verifyFormat("Foo<int> const &a", "const Foo<int> &a", Style);
+  verifyFormat("Foo<int>::iterator const &a", "const Foo<int>::iterator &a",
+               Style);
+
+  verifyFormat("Foo(int a, "
+               "unsigned b, // c-style args\n"
+               "    Bar const &c);",
+               "Foo(int a, "
+               "unsigned b, // c-style args\n"
+               "    const Bar &c);",
+               Style);
+
+  verifyFormat("volatile int const;", "volatile const int;", Style);
+  verifyFormat("volatile int const;", "const volatile int;", Style);
+  verifyFormat("int volatile const;", "const int volatile;", Style);
+  verifyFormat("volatile int const *restrict;", "volatile const int *restrict;",
+               Style);
+  verifyFormat("volatile int const *restrict;", "const volatile int *restrict;",
+               Style);
+  verifyFormat("int volatile const *restrict;", "const int volatile *restrict;",
+               Style);
+
+  verifyFormat("static int const bat;", "static const int bat;", Style);
+  verifyFormat("static int const bat;", "static int const bat;", Style);
+
+  verifyFormat("int const Foo<int>::bat = 0;", "const int Foo<int>::bat = 0;",
+               Style);
+  verifyFormat("int const Foo<int>::bat = 0;", "int const Foo<int>::bat = 0;",
+               Style);
+  verifyFormat("void fn(Foo<T> const &i);", "void fn(const Foo<T> &i);", Style);
+  verifyFormat("int const Foo<int>::fn() {", "int const Foo<int>::fn() {",
+               Style);
+  verifyFormat("Foo<Foo<int>> const *p;", "const Foo<Foo<int>> *p;", Style);
+  verifyFormat(
+      "Foo<Foo<int>> const *p = const_cast<Foo<Foo<int>> const *>(&ffi);",
+      "const Foo<Foo<int>> *p = const_cast<const Foo<Foo<int>> *>(&ffi);",
+      Style);
+
+  verifyFormat("void fn(Foo<T> const &i);", "void fn(const Foo<T> &i);", Style);
+  verifyFormat("void fns(ns::S const &s);", "void fns(const ns::S &s);", Style);
+  verifyFormat("void fn(ns::Foo<T> const &i);", "void fn(const ns::Foo<T> &i);",
+               Style);
+  verifyFormat("void fns(ns::ns2::S const &s);",
+               "void fns(const ns::ns2::S &s);", Style);
+  verifyFormat("void fn(ns::Foo<Bar<T>> const &i);",
+               "void fn(const ns::Foo<Bar<T>> &i);", Style);
+  verifyFormat("void fn(ns::ns2::Foo<Bar<T>> const &i);",
+               "void fn(const ns::ns2::Foo<Bar<T>> &i);", Style);
+  verifyFormat("void fn(ns::ns2::Foo<Bar<T, U>> const &i);",
+               "void fn(const ns::ns2::Foo<Bar<T, U>> &i);", Style);
+
+  verifyFormat("LocalScope const *Scope = nullptr;",
+               "const LocalScope* Scope = nullptr;", Style);
+  verifyFormat("struct DOTGraphTraits<Stmt const *>",
+               "struct DOTGraphTraits<const Stmt *>", Style);
+
+  verifyFormat(
+      "bool tools::addXRayRuntime(ToolChain const &TC, ArgList const &Args) {",
+      "bool tools::addXRayRuntime(const ToolChain&TC, const ArgList &Args) {",
+      Style);
+  verifyFormat("Foo<Foo<int> const> P;", "Foo<const Foo<int>> P;", Style);
+  verifyFormat("Foo<Foo<int> const> P;\n", "Foo<const Foo<int>> P;\n", Style);
+  verifyFormat("Foo<Foo<int> const> P;\n#if 0\n#else\n#endif",
+               "Foo<const Foo<int>> P;\n#if 0\n#else\n#endif", Style);
+
+  verifyFormat("auto const i = 0;", "const auto i = 0;", Style);
+  verifyFormat("auto const &ir = i;", "const auto &ir = i;", Style);
+  verifyFormat("auto const *ip = &i;", "const auto *ip = &i;", Style);
+
+  verifyFormat("Foo<Foo<int> const> P;\n#if 0\n#else\n#endif",
+               "Foo<const Foo<int>> P;\n#if 0\n#else\n#endif", Style);
+ 
+  verifyFormat("Bar<Bar<int const> const> P;\n#if 0\n#else\n#endif",
+               "Bar<Bar<const int> const> P;\n#if 0\n#else\n#endif", Style);
+
+  verifyFormat("Baz<Baz<int const> const> P;\n#if 0\n#else\n#endif",
+               "Baz<const Baz<const int>> P;\n#if 0\n#else\n#endif", Style);
+
+  //verifyFormat("#if 0\nBoo<Boo<int const> const> P;\n#else\n#endif",
+  //             "#if 0\nBoo<const Boo<const int>> P;\n#else\n#endif", Style);
+
+  verifyFormat("int const P;\n#if 0\n#else\n#endif",
+               "const int P;\n#if 0\n#else\n#endif", Style);
+
+  verifyFormat("unsigned long const a;", "const unsigned long a;", Style);
+  verifyFormat("unsigned long long const a;", "const unsigned long long a;", Style);
+
+  // don't adjust macros
+  verifyFormat("const INTPTR a;", "const INTPTR a;", Style);
+}
+
+TEST_F(FormatTest, WestConst) {
+  FormatStyle Style = getLLVMStyle();
+  Style.ConstPlacement = FormatStyle::CS_West;
+
+  verifyFormat("const int a;", Style);
+  verifyFormat("const int *a;", Style);
+  verifyFormat("const int &a;", Style);
+  verifyFormat("const int &&a;", Style);
+  verifyFormat("const int b;", Style);
+  verifyFormat("const int *b;", Style);
+  verifyFormat("const int &b;", Style);
+  verifyFormat("const int &&b;", Style);
+  verifyFormat("const int *b const;", Style);
+  verifyFormat("int *const c;", Style);
+
+  verifyFormat("const Foo a;", Style);
+  verifyFormat("const Foo *a;", Style);
+  verifyFormat("const Foo &a;", Style);
+  verifyFormat("const Foo &&a;", Style);
+  verifyFormat("const Foo b;", Style);
+  verifyFormat("const Foo *b;", Style);
+  verifyFormat("const Foo &b;", Style);
+  verifyFormat("const Foo &&b;", Style);
+  verifyFormat("const Foo *b const;", Style);
+  verifyFormat("Foo *const b;", Style);
+  verifyFormat("const Foo *const b;", Style);
+
+  verifyFormat("LLVM_NODISCARD const int &Foo();", Style);
+
+  verifyFormat("const char a[];", Style);
+  verifyFormat("const auto v = get_value();", Style);
+  verifyFormat("const long long &a;", Style);
+  verifyFormat("const unsigned char *a;", Style);
+  verifyFormat("const unsigned char *a;", "unsigned char const *a;", Style);
+  verifyFormat("const Foo<int> &a", "Foo<int> const &a", Style);
+  verifyFormat("const Foo<int>::iterator &a", "Foo<int>::iterator const &a",
+               Style);
+
+  verifyFormat("const int a;", "int const a;", Style);
+  verifyFormat("const int *a;", "int const *a;", Style);
+  verifyFormat("const int &a;", "int const &a;", Style);
+  verifyFormat("foo(const int &a)", "foo(int const &a)", Style);
+  verifyFormat("unsigned char *a;", "unsigned char *a;", Style);
+  verifyFormat("const unsigned int &get_nu() const",
+               "unsigned int const &get_nu() const", Style);
+
+  verifyFormat("volatile const int;", "volatile const int;", Style);
+  verifyFormat("const volatile int;", "const volatile int;", Style);
+  verifyFormat("const int volatile;", "const int volatile;", Style);
+
+  verifyFormat("volatile const int *restrict;", "volatile const int *restrict;",
+               Style);
+  verifyFormat("const volatile int *restrict;", "const volatile int *restrict;",
+               Style);
+  verifyFormat("const int volatile *restrict;", "const int volatile *restrict;",
+               Style);
+
+  verifyFormat("SourceRange getSourceRange() const override LLVM_READONLY;",
+               Style);
+
+  verifyFormat("void foo() const override;", Style);
+  verifyFormat("void foo() const override LLVM_READONLY;", Style);
+  verifyFormat("void foo() const final;", Style);
+  verifyFormat("void foo() const final LLVM_READONLY;", Style);
+  verifyFormat("void foo() const LLVM_READONLY;", Style);
+
+  verifyFormat(
+      "template <typename Func> explicit Action(const Action<Func> &action);",
+      Style);
+  verifyFormat(
+      "template <typename Func> explicit Action(const Action<Func> &action);",
+      "template <typename Func> explicit Action(Action<Func> const &action);",
+      Style);
+
+  verifyFormat("static const int bat;", "static const int bat;", Style);
+  verifyFormat("static const int bat;", "static int const bat;", Style);
+
+  verifyFormat("static const int Foo<int>::bat = 0;",
+               "static const int Foo<int>::bat = 0;", Style);
+  verifyFormat("static const int Foo<int>::bat = 0;",
+               "static int const Foo<int>::bat = 0;", Style);
+
+  verifyFormat("void fn(const Foo<T> &i);");
+
+  verifyFormat("const int Foo<int>::bat = 0;", "const int Foo<int>::bat = 0;",
+               Style);
+  verifyFormat("const int Foo<int>::bat = 0;", "int const Foo<int>::bat = 0;",
+               Style);
+  verifyFormat("void fn(const Foo<T> &i);", "void fn( Foo<T> const &i);",
+               Style);
+  verifyFormat("const int Foo<int>::fn() {", "int const Foo<int>::fn() {",
+               Style);
+  verifyFormat("const Foo<Foo<int>> *p;", "Foo<Foo<int>> const *p;", Style);
+  verifyFormat(
+      "const Foo<Foo<int>> *p = const_cast<const Foo<Foo<int>> *>(&ffi);",
+      "const Foo<Foo<int>> *p = const_cast<Foo<Foo<int>> const *>(&ffi);",
+      Style);
+
+  verifyFormat("void fn(const Foo<T> &i);", "void fn(Foo<T> const &i);", Style);
+  verifyFormat("void fns(const ns::S &s);", "void fns(ns::S const &s);", Style);
+  verifyFormat("void fn(const ns::Foo<T> &i);", "void fn(ns::Foo<T> const &i);",
+               Style);
+  verifyFormat("void fns(const ns::ns2::S &s);",
+               "void fns(ns::ns2::S const &s);", Style);
+  verifyFormat("void fn(const ns::Foo<Bar<T>> &i);",
+               "void fn(ns::Foo<Bar<T>> const &i);", Style);
+  verifyFormat("void fn(const ns::ns2::Foo<Bar<T>> &i);",
+               "void fn(ns::ns2::Foo<Bar<T>> const &i);", Style);
+  verifyFormat("void fn(const ns::ns2::Foo<Bar<T, U>> &i);",
+               "void fn(ns::ns2::Foo<Bar<T, U>> const &i);", Style);
+
+  verifyFormat("const auto i = 0;", "auto const i = 0;", Style);
+  verifyFormat("const auto &ir = i;", "auto const &ir = i;", Style);
+  verifyFormat("const auto *ip = &i;", "auto const *ip = &i;", Style);
+
+  verifyFormat("Foo<const Foo<int>> P;\n#if 0\n#else\n#endif",
+               "Foo<Foo<int> const> P;\n#if 0\n#else\n#endif", Style);
+
+  verifyFormat("Foo<Foo<const int>> P;\n#if 0\n#else\n#endif",
+               "Foo<Foo<int const>> P;\n#if 0\n#else\n#endif", Style);
+
+  verifyFormat("const int P;\n#if 0\n#else\n#endif",
+               "int const P;\n#if 0\n#else\n#endif", Style);
+
+  verifyFormat("const unsigned long a;", "unsigned long const a;", Style);
+  verifyFormat("const unsigned long long a;", "unsigned long long const a;", Style);
+
+  // don't adjust macros
+  verifyFormat("INTPTR const a;", "INTPTR const a;", Style);
+}
+
 } // namespace
 } // namespace format
 } // namespace clang
