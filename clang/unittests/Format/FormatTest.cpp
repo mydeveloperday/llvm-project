@@ -17298,7 +17298,6 @@ TEST_F(FormatTest, WebKitDefaultStyle) {
                Style);
 }
 
-<<<<<<< HEAD
 TEST_F(FormatTest, EastWestConst) {
   FormatStyle Style = getLLVMStyle();
 
@@ -17622,7 +17621,6 @@ TEST_F(FormatTest, WestConst) {
   verifyFormat("INTPTR const a;", "INTPTR const a;", Style);
 }
 
-=======
 TEST_F(FormatTest, ConceptsAndRequires) {
   FormatStyle Style = getLLVMStyle();
   Style.AllowShortFunctionsOnASingleLine = FormatStyle::SFS_None;
@@ -17893,7 +17891,6 @@ TEST_F(FormatTest, ConceptsAndRequires) {
                "struct constant;",
                Style);
 }
->>>>>>> upstream/master
 } // namespace
 } // namespace format
 } // namespace clang

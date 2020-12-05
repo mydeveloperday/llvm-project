@@ -465,41 +465,6 @@ TEST_F(FormatTestCSharp, AttributesIndentation) {
                Style);
 }
 
-TEST_F(FormatTestCSharp, CSharpSpaceBefore) {
-  FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
-  Style.SpaceBeforeParens = FormatStyle::SBPO_Always;
-
-  verifyFormat("List<string> list;", Style);
-  verifyFormat("Dictionary<string, string> dict;", Style);
-
-  verifyFormat("for (int i = 0; i < size (); i++) {\n"
-               "}",
-               Style);
-  verifyFormat("foreach (var x in y) {\n"
-               "}",
-               Style);
-  verifyFormat("switch (x) {}", Style);
-  verifyFormat("do {\n"
-               "} while (x);",
-               Style);
-
-  Style.SpaceBeforeParens = FormatStyle::SBPO_Never;
-
-  verifyFormat("List<string> list;", Style);
-  verifyFormat("Dictionary<string, string> dict;", Style);
-
-  verifyFormat("for(int i = 0; i < size(); i++) {\n"
-               "}",
-               Style);
-  verifyFormat("foreach(var x in y) {\n"
-               "}",
-               Style);
-  verifyFormat("switch(x) {}", Style);
-  verifyFormat("do {\n"
-               "} while(x);",
-               Style);
-}
-
 TEST_F(FormatTestCSharp, CSharpSpaceAfterCStyleCast) {
   FormatStyle Style = getGoogleStyle(FormatStyle::LK_CSharp);
 
