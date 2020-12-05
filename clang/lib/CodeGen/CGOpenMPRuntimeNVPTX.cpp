@@ -13,14 +13,17 @@
 
 #include "CGOpenMPRuntimeNVPTX.h"
 #include "CodeGenFunction.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Cuda.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
 
 using namespace clang;
 using namespace CodeGen;
+using namespace llvm::omp;
 
 namespace {
 enum OpenMPRTLFunctionNVPTX {
@@ -338,8 +341,7 @@ class CheckVarsEscapingDeclContext final
           if (!Attr)
             return;
           if (((Attr->getCaptureKind() != OMPC_map) &&
-               !isOpenMPPrivate(
-                   static_cast<OpenMPClauseKind>(Attr->getCaptureKind()))) ||
+               !isOpenMPPrivate(Attr->getCaptureKind())) ||
               ((Attr->getCaptureKind() == OMPC_map) &&
                !FD->getType()->isAnyPointerType()))
             return;
@@ -761,6 +763,7 @@ static bool hasNestedSPMDDirective(ASTContext &Ctx,
     case OMPD_parallel:
     case OMPD_for:
     case OMPD_parallel_for:
+    case OMPD_parallel_master:
     case OMPD_parallel_sections:
     case OMPD_for_simd:
     case OMPD_parallel_for_simd:
@@ -782,6 +785,8 @@ static bool hasNestedSPMDDirective(ASTContext &Ctx,
     case OMPD_taskgroup:
     case OMPD_atomic:
     case OMPD_flush:
+    case OMPD_depobj:
+    case OMPD_scan:
     case OMPD_teams:
     case OMPD_target_data:
     case OMPD_target_exit_data:
@@ -797,6 +802,8 @@ static bool hasNestedSPMDDirective(ASTContext &Ctx,
     case OMPD_target_update:
     case OMPD_declare_simd:
     case OMPD_declare_variant:
+    case OMPD_begin_declare_variant:
+    case OMPD_end_declare_variant:
     case OMPD_declare_target:
     case OMPD_end_declare_target:
     case OMPD_declare_reduction:
@@ -836,6 +843,7 @@ static bool supportsSPMDExecutionMode(ASTContext &Ctx,
   case OMPD_parallel:
   case OMPD_for:
   case OMPD_parallel_for:
+  case OMPD_parallel_master:
   case OMPD_parallel_sections:
   case OMPD_for_simd:
   case OMPD_parallel_for_simd:
@@ -857,6 +865,8 @@ static bool supportsSPMDExecutionMode(ASTContext &Ctx,
   case OMPD_taskgroup:
   case OMPD_atomic:
   case OMPD_flush:
+  case OMPD_depobj:
+  case OMPD_scan:
   case OMPD_teams:
   case OMPD_target_data:
   case OMPD_target_exit_data:
@@ -872,6 +882,8 @@ static bool supportsSPMDExecutionMode(ASTContext &Ctx,
   case OMPD_target_update:
   case OMPD_declare_simd:
   case OMPD_declare_variant:
+  case OMPD_begin_declare_variant:
+  case OMPD_end_declare_variant:
   case OMPD_declare_target:
   case OMPD_end_declare_target:
   case OMPD_declare_reduction:
@@ -1004,6 +1016,7 @@ static bool hasNestedLightweightDirective(ASTContext &Ctx,
     case OMPD_parallel:
     case OMPD_for:
     case OMPD_parallel_for:
+    case OMPD_parallel_master:
     case OMPD_parallel_sections:
     case OMPD_for_simd:
     case OMPD_parallel_for_simd:
@@ -1025,6 +1038,8 @@ static bool hasNestedLightweightDirective(ASTContext &Ctx,
     case OMPD_taskgroup:
     case OMPD_atomic:
     case OMPD_flush:
+    case OMPD_depobj:
+    case OMPD_scan:
     case OMPD_teams:
     case OMPD_target_data:
     case OMPD_target_exit_data:
@@ -1040,6 +1055,8 @@ static bool hasNestedLightweightDirective(ASTContext &Ctx,
     case OMPD_target_update:
     case OMPD_declare_simd:
     case OMPD_declare_variant:
+    case OMPD_begin_declare_variant:
+    case OMPD_end_declare_variant:
     case OMPD_declare_target:
     case OMPD_end_declare_target:
     case OMPD_declare_reduction:
@@ -1085,6 +1102,7 @@ static bool supportsLightweightRuntime(ASTContext &Ctx,
   case OMPD_parallel:
   case OMPD_for:
   case OMPD_parallel_for:
+  case OMPD_parallel_master:
   case OMPD_parallel_sections:
   case OMPD_for_simd:
   case OMPD_parallel_for_simd:
@@ -1106,6 +1124,8 @@ static bool supportsLightweightRuntime(ASTContext &Ctx,
   case OMPD_taskgroup:
   case OMPD_atomic:
   case OMPD_flush:
+  case OMPD_depobj:
+  case OMPD_scan:
   case OMPD_teams:
   case OMPD_target_data:
   case OMPD_target_exit_data:
@@ -1121,6 +1141,8 @@ static bool supportsLightweightRuntime(ASTContext &Ctx,
   case OMPD_target_update:
   case OMPD_declare_simd:
   case OMPD_declare_variant:
+  case OMPD_begin_declare_variant:
+  case OMPD_end_declare_variant:
   case OMPD_declare_target:
   case OMPD_end_declare_target:
   case OMPD_declare_reduction:
@@ -1908,19 +1930,6 @@ unsigned CGOpenMPRuntimeNVPTX::getDefaultLocationReserved2Flags() const {
   llvm_unreachable("Unknown flags are requested.");
 }
 
-bool CGOpenMPRuntimeNVPTX::tryEmitDeclareVariant(const GlobalDecl &NewGD,
-                                                 const GlobalDecl &OldGD,
-                                                 llvm::GlobalValue *OrigAddr,
-                                                 bool IsForDefinition) {
-  // Emit the function in OldGD with the body from NewGD, if NewGD is defined.
-  auto *NewFD = cast<FunctionDecl>(NewGD.getDecl());
-  if (NewFD->isDefined()) {
-    CGM.emitOpenMPDeviceFunctionRedefinition(OldGD, NewGD, OrigAddr);
-    return true;
-  }
-  return false;
-}
-
 CGOpenMPRuntimeNVPTX::CGOpenMPRuntimeNVPTX(CodeGenModule &CGM)
     : CGOpenMPRuntime(CGM, "_", "$") {
   if (!CGM.getLangOpts().OpenMPIsDevice)
@@ -1928,7 +1937,7 @@ CGOpenMPRuntimeNVPTX::CGOpenMPRuntimeNVPTX(CodeGenModule &CGM)
 }
 
 void CGOpenMPRuntimeNVPTX::emitProcBindClause(CodeGenFunction &CGF,
-                                              OpenMPProcBindClauseKind ProcBind,
+                                              ProcBindKind ProcBind,
                                               SourceLocation Loc) {
   // Do nothing in case of SPMD mode and L0 parallel.
   if (getExecutionMode() == CGOpenMPRuntimeNVPTX::EM_SPMD)
@@ -2318,7 +2327,7 @@ void CGOpenMPRuntimeNVPTX::emitGenericVarsProlog(CodeGenFunction &CGF,
         VarTy = Rec.second.FD->getType();
       } else {
         llvm::Value *Ptr = CGF.Builder.CreateInBoundsGEP(
-            VarAddr.getAddress().getPointer(),
+            VarAddr.getAddress(CGF).getPointer(),
             {Bld.getInt32(0), getNVPTXLaneID(CGF)});
         VarTy =
             Rec.second.FD->getType()->castAsArrayTypeUnsafe()->getElementType();
@@ -2326,7 +2335,7 @@ void CGOpenMPRuntimeNVPTX::emitGenericVarsProlog(CodeGenFunction &CGF,
             Address(Ptr, CGM.getContext().getDeclAlign(Rec.first)), VarTy,
             AlignmentSource::Decl);
       }
-      Rec.second.PrivateAddr = VarAddr.getAddress();
+      Rec.second.PrivateAddr = VarAddr.getAddress(CGF);
       if (!IsInTTDRegion &&
           (WithSPMDCheck ||
            getExecutionMode() == CGOpenMPRuntimeNVPTX::EM_Unknown)) {
@@ -2337,10 +2346,10 @@ void CGOpenMPRuntimeNVPTX::emitGenericVarsProlog(CodeGenFunction &CGF,
                  "Secondary glob data must be one per team.");
           LValue SecVarAddr = CGF.EmitLValueForField(SecBase, SecIt->second.FD);
           VarAddr.setAddress(
-              Address(Bld.CreateSelect(IsTTD, SecVarAddr.getPointer(),
-                                       VarAddr.getPointer()),
+              Address(Bld.CreateSelect(IsTTD, SecVarAddr.getPointer(CGF),
+                                       VarAddr.getPointer(CGF)),
                       VarAddr.getAlignment()));
-          Rec.second.PrivateAddr = VarAddr.getAddress();
+          Rec.second.PrivateAddr = VarAddr.getAddress(CGF);
         }
         Address GlobalPtr = Rec.second.PrivateAddr;
         Address LocalAddr = CGF.CreateMemTemp(VarTy, Rec.second.FD->getName());
@@ -2352,7 +2361,8 @@ void CGOpenMPRuntimeNVPTX::emitGenericVarsProlog(CodeGenFunction &CGF,
       if (EscapedParam) {
         const auto *VD = cast<VarDecl>(Rec.first);
         CGF.EmitStoreOfScalar(ParValue, VarAddr);
-        I->getSecond().MappedParams->setVarAddr(CGF, VD, VarAddr.getAddress());
+        I->getSecond().MappedParams->setVarAddr(CGF, VD,
+                                                VarAddr.getAddress(CGF));
       }
       if (IsTTD)
         ++SecIt;
@@ -2386,7 +2396,7 @@ void CGOpenMPRuntimeNVPTX::emitGenericVarsProlog(CodeGenFunction &CGF,
                                      CGM.getContext().getDeclAlign(VD),
                                      AlignmentSource::Decl);
     I->getSecond().MappedParams->setVarAddr(CGF, cast<VarDecl>(VD),
-                                            Base.getAddress());
+                                            Base.getAddress(CGF));
     I->getSecond().EscapedVariableLengthDeclsAddrs.emplace_back(GlobalRecValue);
   }
   I->getSecond().MappedParams->apply(CGF);
@@ -2647,7 +2657,7 @@ void CGOpenMPRuntimeNVPTX::emitNonSPMDParallelCall(
   };
 
   if (IfCond) {
-    emitOMPIfClause(CGF, IfCond, LNParallelGen, SeqGen);
+    emitIfClause(CGF, IfCond, LNParallelGen, SeqGen);
   } else {
     CodeGenFunction::RunCleanupsScope Scope(CGF);
     RegionCodeGenTy ThenRCG(LNParallelGen);
@@ -3690,7 +3700,8 @@ static llvm::Value *emitListToGlobalCopyFunction(
     const FieldDecl *FD = VarFieldMap.lookup(VD);
     LValue GlobLVal = CGF.EmitLValueForField(
         CGF.MakeNaturalAlignAddrLValue(BufferArrPtr, StaticTy), FD);
-    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(GlobLVal.getPointer(), Idxs);
+    llvm::Value *BufferPtr =
+        Bld.CreateInBoundsGEP(GlobLVal.getPointer(CGF), Idxs);
     GlobLVal.setAddress(Address(BufferPtr, GlobLVal.getAlignment()));
     switch (CGF.getEvaluationKind(Private->getType())) {
     case TEK_Scalar: {
@@ -3787,7 +3798,8 @@ static llvm::Value *emitListToGlobalReduceFunction(
     const FieldDecl *FD = VarFieldMap.lookup(VD);
     LValue GlobLVal = CGF.EmitLValueForField(
         CGF.MakeNaturalAlignAddrLValue(BufferArrPtr, StaticTy), FD);
-    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(GlobLVal.getPointer(), Idxs);
+    llvm::Value *BufferPtr =
+        Bld.CreateInBoundsGEP(GlobLVal.getPointer(CGF), Idxs);
     llvm::Value *Ptr = CGF.EmitCastToVoidPtr(BufferPtr);
     CGF.EmitStoreOfScalar(Ptr, Elem, /*Volatile=*/false, C.VoidPtrTy);
     if ((*IPriv)->getType()->isVariablyModifiedType()) {
@@ -3891,7 +3903,8 @@ static llvm::Value *emitGlobalToListCopyFunction(
     const FieldDecl *FD = VarFieldMap.lookup(VD);
     LValue GlobLVal = CGF.EmitLValueForField(
         CGF.MakeNaturalAlignAddrLValue(BufferArrPtr, StaticTy), FD);
-    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(GlobLVal.getPointer(), Idxs);
+    llvm::Value *BufferPtr =
+        Bld.CreateInBoundsGEP(GlobLVal.getPointer(CGF), Idxs);
     GlobLVal.setAddress(Address(BufferPtr, GlobLVal.getAlignment()));
     switch (CGF.getEvaluationKind(Private->getType())) {
     case TEK_Scalar: {
@@ -3987,7 +4000,8 @@ static llvm::Value *emitGlobalToListReduceFunction(
     const FieldDecl *FD = VarFieldMap.lookup(VD);
     LValue GlobLVal = CGF.EmitLValueForField(
         CGF.MakeNaturalAlignAddrLValue(BufferArrPtr, StaticTy), FD);
-    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(GlobLVal.getPointer(), Idxs);
+    llvm::Value *BufferPtr =
+        Bld.CreateInBoundsGEP(GlobLVal.getPointer(CGF), Idxs);
     llvm::Value *Ptr = CGF.EmitCastToVoidPtr(BufferPtr);
     CGF.EmitStoreOfScalar(Ptr, Elem, /*Volatile=*/false, C.VoidPtrTy);
     if ((*IPriv)->getType()->isVariablyModifiedType()) {
@@ -4310,7 +4324,7 @@ void CGOpenMPRuntimeNVPTX::emitReduction(
     Address Elem = CGF.Builder.CreateConstArrayGEP(ReductionList, Idx);
     CGF.Builder.CreateStore(
         CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-            CGF.EmitLValue(RHSExprs[I]).getPointer(), CGF.VoidPtrTy),
+            CGF.EmitLValue(RHSExprs[I]).getPointer(CGF), CGF.VoidPtrTy),
         Elem);
     if ((*IPriv)->getType()->isVariablyModifiedType()) {
       // Store array size.
@@ -4742,6 +4756,7 @@ Address CGOpenMPRuntimeNVPTX::getAddressOfLocalVariable(CodeGenFunction &CGF,
     switch (A->getAllocatorType()) {
       // Use the default allocator here as by default local vars are
       // threadlocal.
+    case OMPAllocateDeclAttr::OMPNullMemAlloc:
     case OMPAllocateDeclAttr::OMPDefaultMemAlloc:
     case OMPAllocateDeclAttr::OMPThreadMemAlloc:
     case OMPAllocateDeclAttr::OMPHighBWMemAlloc:
@@ -4892,7 +4907,7 @@ void CGOpenMPRuntimeNVPTX::adjustTargetSpecificDataForLambdas(
       if (VD->getType().getCanonicalType()->isReferenceType())
         VDAddr = CGF.EmitLoadOfReferenceLValue(VDAddr,
                                                VD->getType().getCanonicalType())
-                     .getAddress();
+                     .getAddress(CGF);
       CGF.EmitStoreOfScalar(VDAddr.getPointer(), VarLVal);
     }
   }
@@ -4908,6 +4923,7 @@ bool CGOpenMPRuntimeNVPTX::hasAllocateAttributeForGlobalVar(const VarDecl *VD,
     return false;
   const auto *A = VD->getAttr<OMPAllocateDeclAttr>();
   switch(A->getAllocatorType()) {
+  case OMPAllocateDeclAttr::OMPNullMemAlloc:
   case OMPAllocateDeclAttr::OMPDefaultMemAlloc:
   // Not supported, fallback to the default mem space.
   case OMPAllocateDeclAttr::OMPThreadMemAlloc:
@@ -4950,7 +4966,7 @@ static CudaArch getCudaArch(CodeGenModule &CGM) {
 
 /// Check to see if target architecture supports unified addressing which is
 /// a restriction for OpenMP requires clause "unified_shared_memory".
-void CGOpenMPRuntimeNVPTX::checkArchForUnifiedAddressing(
+void CGOpenMPRuntimeNVPTX::processRequiresDirective(
     const OMPRequiresDecl *D) {
   for (const OMPClause *Clause : D->clauselists()) {
     if (Clause->getClauseKind() == OMPC_unified_shared_memory) {
@@ -4978,6 +4994,7 @@ void CGOpenMPRuntimeNVPTX::checkArchForUnifiedAddressing(
       case CudaArch::SM_70:
       case CudaArch::SM_72:
       case CudaArch::SM_75:
+      case CudaArch::SM_80:
       case CudaArch::GFX600:
       case CudaArch::GFX601:
       case CudaArch::GFX700:
@@ -5005,7 +5022,7 @@ void CGOpenMPRuntimeNVPTX::checkArchForUnifiedAddressing(
       }
     }
   }
-  CGOpenMPRuntime::checkArchForUnifiedAddressing(D);
+  CGOpenMPRuntime::processRequiresDirective(D);
 }
 
 /// Get number of SMs and number of blocks per SM.
@@ -5035,6 +5052,7 @@ static std::pair<unsigned, unsigned> getSMsBlocksPerSM(CodeGenModule &CGM) {
   case CudaArch::SM_70:
   case CudaArch::SM_72:
   case CudaArch::SM_75:
+  case CudaArch::SM_80:
     return {84, 32};
   case CudaArch::GFX600:
   case CudaArch::GFX601:

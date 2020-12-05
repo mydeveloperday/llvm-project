@@ -29,13 +29,10 @@
 // Attributes & builtins related macros.
 
 #define INTERFACE __attribute__((visibility("default")))
+#define HIDDEN __attribute__((visibility("hidden")))
 #define WEAK __attribute__((weak))
-#define INLINE inline
 #define ALWAYS_INLINE inline __attribute__((always_inline))
 #define ALIAS(X) __attribute__((alias(X)))
-// Please only use the ALIGNED macro before the type. Using ALIGNED after the
-// variable declaration is not portable.
-#define ALIGNED(X) __attribute__((aligned(X)))
 #define FORMAT(F, A) __attribute__((format(printf, F, A)))
 #define NOINLINE __attribute__((noinline))
 #define NORETURN __attribute__((noreturn))
@@ -125,8 +122,6 @@ void NORETURN reportCheckFailed(const char *File, int Line,
     CHECK(0 && Msg);                                                           \
     die();                                                                     \
   } while (0)
-
-#define COMPILER_CHECK(Pred) static_assert(Pred, "")
 
 } // namespace scudo
 

@@ -10,19 +10,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenFunction.h"
 #include "CGCXXABI.h"
 #include "CGCleanup.h"
 #include "CGObjCRuntime.h"
+#include "CodeGenFunction.h"
 #include "ConstantEmitter.h"
 #include "TargetInfo.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/Basic/DiagnosticSema.h"
 #include "clang/Basic/TargetBuiltins.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsWebAssembly.h"
 #include "llvm/Support/SaveAndRestore.h"
 
 using namespace clang;
@@ -467,6 +469,18 @@ void CodeGenFunction::EmitStartEHSpec(const Decl *D) {
     // encode these in an object file but MSVC doesn't do anything with it.
     if (getTarget().getCXXABI().isMicrosoft())
       return;
+    // In wasm we currently treat 'throw()' in the same way as 'noexcept'. In
+    // case of throw with types, we ignore it and print a warning for now.
+    // TODO Correctly handle exception specification in wasm
+    if (CGM.getLangOpts().WasmExceptions) {
+      if (EST == EST_DynamicNone)
+        EHStack.pushTerminate();
+      else
+        CGM.getDiags().Report(D->getLocation(),
+                              diag::warn_wasm_dynamic_exception_spec_ignored)
+            << FD->getExceptionSpecSourceRange();
+      return;
+    }
     unsigned NumExceptions = Proto->getNumExceptions();
     EHFilterScope *Filter = EHStack.pushFilter(NumExceptions);
 
@@ -543,6 +557,14 @@ void CodeGenFunction::EmitEndEHSpec(const Decl *D) {
     // encode these in an object file but MSVC doesn't do anything with it.
     if (getTarget().getCXXABI().isMicrosoft())
       return;
+    // In wasm we currently treat 'throw()' in the same way as 'noexcept'. In
+    // case of throw with types, we ignore it and print a warning for now.
+    // TODO Correctly handle exception specification in wasm
+    if (CGM.getLangOpts().WasmExceptions) {
+      if (EST == EST_DynamicNone)
+        EHStack.popTerminate();
+      return;
+    }
     EHFilterScope &filterScope = cast<EHFilterScope>(*EHStack.begin());
     emitFilterDispatchBlock(*this, filterScope);
     EHStack.popFilter();
@@ -702,12 +724,12 @@ llvm::BasicBlock *CodeGenFunction::getInvokeDestImpl() {
   assert(EHStack.requiresLandingPad());
   assert(!EHStack.empty());
 
-  // If exceptions are disabled and SEH is not in use, then there is no invoke
-  // destination. SEH "works" even if exceptions are off. In practice, this
-  // means that C++ destructors and other EH cleanups don't run, which is
+  // If exceptions are disabled/ignored and SEH is not in use, then there is no
+  // invoke destination. SEH "works" even if exceptions are off. In practice,
+  // this means that C++ destructors and other EH cleanups don't run, which is
   // consistent with MSVC's behavior.
   const LangOptions &LO = CGM.getLangOpts();
-  if (!LO.Exceptions) {
+  if (!LO.Exceptions || LO.IgnoreExceptions) {
     if (!LO.Borland && !LO.MicrosoftExt)
       return nullptr;
     if (!currentFunctionUsesSEHTry())
@@ -750,7 +772,9 @@ llvm::BasicBlock *CodeGenFunction::getInvokeDestImpl() {
 
 llvm::BasicBlock *CodeGenFunction::EmitLandingPad() {
   assert(EHStack.requiresLandingPad());
-
+  assert(!CGM.getLangOpts().IgnoreExceptions &&
+         "LandingPad should not be emitted when -fignore-exceptions are in "
+         "effect.");
   EHScope &innermostEHScope = *EHStack.find(EHStack.getInnermostEHScope());
   switch (innermostEHScope.getKind()) {
   case EHScope::Terminate:
@@ -1636,6 +1660,19 @@ struct PerformSEHFinally final : EHScopeStack::Cleanup {
 
     llvm::Value *IsForEH =
         llvm::ConstantInt::get(CGF.ConvertType(ArgTys[0]), F.isForEHCleanup());
+
+    // Except _leave and fall-through at the end, all other exits in a _try
+    //   (return/goto/continue/break) are considered as abnormal terminations
+    //   since _leave/fall-through is always Indexed 0,
+    //   just use NormalCleanupDestSlot (>= 1 for goto/return/..),
+    //   as 1st Arg to indicate abnormal termination
+    if (!F.isForEHCleanup() && F.hasExitSwitch()) {
+      Address Addr = CGF.getNormalCleanupDestSlot();
+      llvm::Value *Load = CGF.Builder.CreateLoad(Addr, "cleanup.dest");
+      llvm::Value *Zero = llvm::Constant::getNullValue(CGM.Int32Ty);
+      IsForEH = CGF.Builder.CreateICmpNE(Load, Zero);
+    }
+
     Args.add(RValue::get(IsForEH), ArgTys[0]);
     Args.add(RValue::get(FP), ArgTys[1]);
 
@@ -1884,7 +1921,7 @@ void CodeGenFunction::startOutlinedSEHHelper(CodeGenFunction &ParentCGF,
                 OutlinedStmt->getBeginLoc(), OutlinedStmt->getBeginLoc());
   CurSEHParent = ParentCGF.CurSEHParent;
 
-  CGM.SetLLVMFunctionAttributes(GlobalDecl(), FnInfo, CurFn);
+  CGM.SetInternalFunctionAttributes(GlobalDecl(), CurFn, FnInfo);
   EmitCapturedLocals(ParentCGF, OutlinedStmt, IsFilter);
 }
 

@@ -56,8 +56,9 @@ entry:
 define i32 @select_with_negation(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; MIPS32-LABEL: select_with_negation:
 ; MIPS32:       # %bb.0: # %entry
-; MIPS32-NEXT:    slt $1, $4, $5
-; MIPS32-NEXT:    not $1, $1
+; MIPS32-NEXT:    ori $1, $zero, 1
+; MIPS32-NEXT:    slt $2, $4, $5
+; MIPS32-NEXT:    xor $1, $2, $1
 ; MIPS32-NEXT:    andi $1, $1, 1
 ; MIPS32-NEXT:    movn $7, $6, $1
 ; MIPS32-NEXT:    move $2, $7
@@ -114,9 +115,9 @@ entry:
 define float @select_float(i1 %test, float %a, float %b) {
 ; MIPS32-LABEL: select_float:
 ; MIPS32:       # %bb.0: # %entry
+; MIPS32-NEXT:    andi $1, $4, 1
 ; MIPS32-NEXT:    mtc1 $5, $f0
 ; MIPS32-NEXT:    mtc1 $6, $f1
-; MIPS32-NEXT:    andi $1, $4, 1
 ; MIPS32-NEXT:    movn.s $f1, $f0, $1
 ; MIPS32-NEXT:    mov.s $f0, $f1
 ; MIPS32-NEXT:    jr $ra

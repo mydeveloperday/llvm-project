@@ -175,7 +175,8 @@ define <4 x i32> @inselt_shuf_no_demand_multiuse(i32 %a0, i32 %a1, <4 x i32> %b)
 ; CHECK-NEXT:    [[OUT0:%.*]] = insertelement <4 x i32> undef, i32 [[A0:%.*]], i32 0
 ; CHECK-NEXT:    [[OUT01:%.*]] = insertelement <4 x i32> [[OUT0]], i32 [[A1:%.*]], i32 1
 ; CHECK-NEXT:    [[FOO:%.*]] = add <4 x i32> [[OUT01]], [[B:%.*]]
-; CHECK-NEXT:    ret <4 x i32> [[FOO]]
+; CHECK-NEXT:    [[SHUFFLE:%.*]] = shufflevector <4 x i32> [[FOO]], <4 x i32> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+; CHECK-NEXT:    ret <4 x i32> [[SHUFFLE]]
 ;
   %out0 = insertelement <4 x i32> undef, i32 %a0, i32 0
   %out01 = insertelement <4 x i32> %out0, i32 %a1, i32 1
@@ -189,7 +190,8 @@ define <4 x i32> @inselt_shuf_no_demand_multiuse(i32 %a0, i32 %a1, <4 x i32> %b)
 define <4 x float> @inselt_shuf_no_demand_bogus_insert_index_in_chain(float %a1, float %a2, float %a3, i32 %variable_index) {
 ; CHECK-LABEL: @inselt_shuf_no_demand_bogus_insert_index_in_chain(
 ; CHECK-NEXT:    [[OUT12:%.*]] = insertelement <4 x float> undef, float [[A2:%.*]], i32 [[VARIABLE_INDEX:%.*]]
-; CHECK-NEXT:    ret <4 x float> [[OUT12]]
+; CHECK-NEXT:    [[SHUFFLE:%.*]] = shufflevector <4 x float> [[OUT12]], <4 x float> undef, <4 x i32> <i32 0, i32 undef, i32 undef, i32 undef>
+; CHECK-NEXT:    ret <4 x float> [[SHUFFLE]]
 ;
   %out1 = insertelement <4 x float> undef, float %a1, i32 1
   %out12 = insertelement <4 x float> %out1, float %a2, i32 %variable_index ; something unexpected
@@ -214,7 +216,8 @@ define <3 x i8> @shuf_add(<3 x i8> %x) {
 define <3 x i8> @shuf_sub(<3 x i8> %x) {
 ; CHECK-LABEL: @shuf_sub(
 ; CHECK-NEXT:    [[BO:%.*]] = sub <3 x i8> <i8 1, i8 undef, i8 3>, [[X:%.*]]
-; CHECK-NEXT:    ret <3 x i8> [[BO]]
+; CHECK-NEXT:    [[R:%.*]] = shufflevector <3 x i8> [[BO]], <3 x i8> undef, <3 x i32> <i32 0, i32 undef, i32 2>
+; CHECK-NEXT:    ret <3 x i8> [[R]]
 ;
   %bo = sub nuw <3 x i8> <i8 1, i8 2, i8 3>, %x
   %r = shufflevector <3 x i8> %bo, <3 x i8> undef, <3 x i32> <i32 0, i32 undef, i32 2>
@@ -668,4 +671,65 @@ bb:
   %tmp = getelementptr inbounds [0 x i32], <4 x [0 x i32]*> <[0 x i32]* @global, [0 x i32]* @global, [0 x i32]* @global, [0 x i32]* @global>, <4 x i64> zeroinitializer, <4 x i64> %arg
   %tmp2 = extractelement <4 x i32*> %tmp, i64 0
   ret i32* %tmp2
+}
+
+; The non-zero elements of the result are always 'min', so the splat is unnecessary.
+
+define <4 x i8> @select_cond_with_eq_true_false_elts(<4 x i8> %x, <4 x i8> %y, <4 x i1> %cmp) {
+; CHECK-LABEL: @select_cond_with_eq_true_false_elts(
+; CHECK-NEXT:    [[TVAL:%.*]] = shufflevector <4 x i8> [[X:%.*]], <4 x i8> [[Y:%.*]], <4 x i32> <i32 0, i32 5, i32 6, i32 7>
+; CHECK-NEXT:    [[SPLAT:%.*]] = shufflevector <4 x i1> [[CMP:%.*]], <4 x i1> undef, <4 x i32> zeroinitializer
+; CHECK-NEXT:    [[R:%.*]] = select <4 x i1> [[SPLAT]], <4 x i8> [[TVAL]], <4 x i8> [[Y]]
+; CHECK-NEXT:    ret <4 x i8> [[R]]
+;
+  %tval = shufflevector <4 x i8> %x, <4 x i8> %y, <4 x i32> <i32 0, i32 5, i32 6, i32 7>
+  %splat = shufflevector <4 x i1> %cmp, <4 x i1> undef, <4 x i32> zeroinitializer
+  %r = select <4 x i1> %splat, <4 x i8> %tval, <4 x i8> %y
+  ret <4 x i8> %r
+}
+
+; First element of the result is always x[0], so first element of select condition is unnecessary.
+
+define <4 x i8> @select_cond_with_eq_true_false_elts2(<4 x i8> %x, <4 x i8> %y, <4 x i1> %cmp) {
+; CHECK-LABEL: @select_cond_with_eq_true_false_elts2(
+; CHECK-NEXT:    [[TVAL:%.*]] = shufflevector <4 x i8> [[X:%.*]], <4 x i8> [[Y:%.*]], <4 x i32> <i32 0, i32 5, i32 6, i32 7>
+; CHECK-NEXT:    [[COND:%.*]] = shufflevector <4 x i1> [[CMP:%.*]], <4 x i1> undef, <4 x i32> <i32 0, i32 1, i32 0, i32 1>
+; CHECK-NEXT:    [[R:%.*]] = select <4 x i1> [[COND]], <4 x i8> [[TVAL]], <4 x i8> [[X]]
+; CHECK-NEXT:    ret <4 x i8> [[R]]
+;
+  %tval = shufflevector <4 x i8> %x, <4 x i8> %y, <4 x i32> <i32 0, i32 5, i32 6, i32 7>
+  %cond = shufflevector <4 x i1> %cmp, <4 x i1> undef, <4 x i32> <i32 0, i32 1, i32 0, i32 1>
+  %r = select <4 x i1> %cond, <4 x i8> %tval, <4 x i8> %x
+  ret <4 x i8> %r
+}
+
+; Second element of the result is always x[3], so second element of select condition is unnecessary.
+; Fourth element of the result is always undef, so fourth element of select condition is unnecessary.
+
+define <4 x float> @select_cond_with_eq_true_false_elts3(<4 x float> %x, <4 x float> %y, <4 x i1> %cmp) {
+; CHECK-LABEL: @select_cond_with_eq_true_false_elts3(
+; CHECK-NEXT:    [[TVAL:%.*]] = shufflevector <4 x float> [[X:%.*]], <4 x float> [[Y:%.*]], <4 x i32> <i32 1, i32 3, i32 5, i32 undef>
+; CHECK-NEXT:    [[FVAL:%.*]] = shufflevector <4 x float> [[Y]], <4 x float> [[X]], <4 x i32> <i32 0, i32 7, i32 6, i32 undef>
+; CHECK-NEXT:    [[COND:%.*]] = shufflevector <4 x i1> [[CMP:%.*]], <4 x i1> undef, <4 x i32> <i32 undef, i32 1, i32 2, i32 3>
+; CHECK-NEXT:    [[R:%.*]] = select <4 x i1> [[COND]], <4 x float> [[TVAL]], <4 x float> [[FVAL]]
+; CHECK-NEXT:    ret <4 x float> [[R]]
+;
+  %tval = shufflevector <4 x float> %x, <4 x float> %y, <4 x i32> <i32 1, i32 3, i32 5, i32 undef>
+  %fval = shufflevector <4 x float> %y, <4 x float> %x, <4 x i32> <i32 0, i32 7, i32 6, i32 undef>
+  %cond = shufflevector <4 x i1> %cmp, <4 x i1> undef, <4 x i32> <i32 undef, i32 1, i32 2, i32 3>
+  %r = select <4 x i1> %cond, <4 x float> %tval, <4 x float> %fval
+  ret <4 x float> %r
+}
+
+define <4 x i8> @select_cond_with_undef_true_false_elts(<4 x i8> %x, <4 x i8> %y, <4 x i1> %cmp) {
+; CHECK-LABEL: @select_cond_with_undef_true_false_elts(
+; CHECK-NEXT:    [[TVAL:%.*]] = shufflevector <4 x i8> [[Y:%.*]], <4 x i8> undef, <4 x i32> <i32 undef, i32 1, i32 2, i32 3>
+; CHECK-NEXT:    [[COND:%.*]] = shufflevector <4 x i1> [[CMP:%.*]], <4 x i1> undef, <4 x i32> <i32 0, i32 1, i32 0, i32 1>
+; CHECK-NEXT:    [[R:%.*]] = select <4 x i1> [[COND]], <4 x i8> [[TVAL]], <4 x i8> [[X:%.*]]
+; CHECK-NEXT:    ret <4 x i8> [[R]]
+;
+  %tval = shufflevector <4 x i8> %x, <4 x i8> %y, <4 x i32> <i32 undef, i32 5, i32 6, i32 7>
+  %cond = shufflevector <4 x i1> %cmp, <4 x i1> undef, <4 x i32> <i32 0, i32 1, i32 0, i32 1>
+  %r = select <4 x i1> %cond, <4 x i8> %tval, <4 x i8> %x
+  ret <4 x i8> %r
 }

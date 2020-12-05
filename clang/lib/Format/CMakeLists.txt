@@ -14,6 +14,7 @@ add_clang_library(clangFormat
   UnwrappedLineFormatter.cpp
   UnwrappedLineParser.cpp
   UsingDeclarationsSorter.cpp
+  EastWestConstFixer.cpp
   WhitespaceManager.cpp
 
   LINK_LIBS

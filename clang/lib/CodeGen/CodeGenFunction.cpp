@@ -12,9 +12,9 @@
 
 #include "CodeGenFunction.h"
 #include "CGBlocks.h"
-#include "CGCleanup.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
+#include "CGCleanup.h"
 #include "CGDebugInfo.h"
 #include "CGOpenMPRuntime.h"
 #include "CodeGenModule.h"
@@ -22,6 +22,7 @@
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/StmtCXX.h"
@@ -31,6 +32,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
+#include "llvm/Frontend/OpenMP/OMPIRBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/FPEnv.h"
@@ -103,27 +105,20 @@ CodeGenFunction::~CodeGenFunction() {
 
   if (getLangOpts().OpenMP && CurFn)
     CGM.getOpenMPRuntime().functionFinished(*this);
-}
 
-// Map the LangOption for rounding mode into
-// the corresponding enum in the IR.
-static llvm::fp::RoundingMode ToConstrainedRoundingMD(
-  LangOptions::FPRoundingModeKind Kind) {
-
-  switch (Kind) {
-  case LangOptions::FPR_ToNearest:  return llvm::fp::rmToNearest;
-  case LangOptions::FPR_Downward:   return llvm::fp::rmDownward;
-  case LangOptions::FPR_Upward:     return llvm::fp::rmUpward;
-  case LangOptions::FPR_TowardZero: return llvm::fp::rmTowardZero;
-  case LangOptions::FPR_Dynamic:    return llvm::fp::rmDynamic;
-  }
-  llvm_unreachable("Unsupported FP RoundingMode");
+  // If we have an OpenMPIRBuilder we want to finalize functions (incl.
+  // outlining etc) at some point. Doing it once the function codegen is done
+  // seems to be a reasonable spot. We do it here, as opposed to the deletion
+  // time of the CodeGenModule, because we have to ensure the IR has not yet
+  // been "emitted" to the outside, thus, modifications are still sensible.
+  if (llvm::OpenMPIRBuilder *OMPBuilder = CGM.getOpenMPIRBuilder())
+    OMPBuilder->finalize();
 }
 
 // Map the LangOption for exception behavior into
 // the corresponding enum in the IR.
-static llvm::fp::ExceptionBehavior ToConstrainedExceptMD(
-  LangOptions::FPExceptionModeKind Kind) {
+llvm::fp::ExceptionBehavior
+clang::ToConstrainedExceptMD(LangOptions::FPExceptionModeKind Kind) {
 
   switch (Kind) {
   case LangOptions::FPE_Ignore:  return llvm::fp::ebIgnore;
@@ -134,81 +129,20 @@ static llvm::fp::ExceptionBehavior ToConstrainedExceptMD(
 }
 
 void CodeGenFunction::SetFPModel() {
-  auto fpRoundingMode = ToConstrainedRoundingMD(
-                          getLangOpts().getFPRoundingMode());
+  llvm::RoundingMode RM = getLangOpts().getFPRoundingMode();
   auto fpExceptionBehavior = ToConstrainedExceptMD(
                                getLangOpts().getFPExceptionMode());
 
-  if (fpExceptionBehavior == llvm::fp::ebIgnore &&
-      fpRoundingMode == llvm::fp::rmToNearest)
-    // Constrained intrinsics are not used.
-    ;
-  else {
-    Builder.setIsFPConstrained(true);
-    Builder.setDefaultConstrainedRounding(fpRoundingMode);
-    Builder.setDefaultConstrainedExcept(fpExceptionBehavior);
-  }
-}
-
-CharUnits CodeGenFunction::getNaturalPointeeTypeAlignment(QualType T,
-                                                    LValueBaseInfo *BaseInfo,
-                                                    TBAAAccessInfo *TBAAInfo) {
-  return getNaturalTypeAlignment(T->getPointeeType(), BaseInfo, TBAAInfo,
-                                 /* forPointeeType= */ true);
-}
-
-CharUnits CodeGenFunction::getNaturalTypeAlignment(QualType T,
-                                                   LValueBaseInfo *BaseInfo,
-                                                   TBAAAccessInfo *TBAAInfo,
-                                                   bool forPointeeType) {
-  if (TBAAInfo)
-    *TBAAInfo = CGM.getTBAAAccessInfo(T);
-
-  // Honor alignment typedef attributes even on incomplete types.
-  // We also honor them straight for C++ class types, even as pointees;
-  // there's an expressivity gap here.
-  if (auto TT = T->getAs<TypedefType>()) {
-    if (auto Align = TT->getDecl()->getMaxAlignment()) {
-      if (BaseInfo)
-        *BaseInfo = LValueBaseInfo(AlignmentSource::AttributedType);
-      return getContext().toCharUnitsFromBits(Align);
-    }
-  }
-
-  if (BaseInfo)
-    *BaseInfo = LValueBaseInfo(AlignmentSource::Type);
-
-  CharUnits Alignment;
-  if (T->isIncompleteType()) {
-    Alignment = CharUnits::One(); // Shouldn't be used, but pessimistic is best.
-  } else {
-    // For C++ class pointees, we don't know whether we're pointing at a
-    // base or a complete object, so we generally need to use the
-    // non-virtual alignment.
-    const CXXRecordDecl *RD;
-    if (forPointeeType && (RD = T->getAsCXXRecordDecl())) {
-      Alignment = CGM.getClassPointerAlignment(RD);
-    } else {
-      Alignment = getContext().getTypeAlignInChars(T);
-      if (T.getQualifiers().hasUnaligned())
-        Alignment = CharUnits::One();
-    }
-
-    // Cap to the global maximum type alignment unless the alignment
-    // was somehow explicit on the type.
-    if (unsigned MaxAlign = getLangOpts().MaxTypeAlign) {
-      if (Alignment.getQuantity() > MaxAlign &&
-          !getContext().isAlignmentRequired(T))
-        Alignment = CharUnits::fromQuantity(MaxAlign);
-    }
-  }
-  return Alignment;
+  Builder.setDefaultConstrainedRounding(RM);
+  Builder.setDefaultConstrainedExcept(fpExceptionBehavior);
+  Builder.setIsFPConstrained(fpExceptionBehavior != llvm::fp::ebIgnore ||
+                             RM != llvm::RoundingMode::NearestTiesToEven);
 }
 
 LValue CodeGenFunction::MakeNaturalAlignAddrLValue(llvm::Value *V, QualType T) {
   LValueBaseInfo BaseInfo;
   TBAAAccessInfo TBAAInfo;
-  CharUnits Alignment = getNaturalTypeAlignment(T, &BaseInfo, &TBAAInfo);
+  CharUnits Alignment = CGM.getNaturalTypeAlignment(T, &BaseInfo, &TBAAInfo);
   return LValue::MakeAddr(Address(V, Alignment), T, getContext(), BaseInfo,
                           TBAAInfo);
 }
@@ -219,8 +153,8 @@ LValue
 CodeGenFunction::MakeNaturalAlignPointeeAddrLValue(llvm::Value *V, QualType T) {
   LValueBaseInfo BaseInfo;
   TBAAAccessInfo TBAAInfo;
-  CharUnits Align = getNaturalTypeAlignment(T, &BaseInfo, &TBAAInfo,
-                                            /* forPointeeType= */ true);
+  CharUnits Align = CGM.getNaturalTypeAlignment(T, &BaseInfo, &TBAAInfo,
+                                                /* forPointeeType= */ true);
   return MakeAddrLValue(Address(V, Align), T, BaseInfo, TBAAInfo);
 }
 
@@ -258,11 +192,13 @@ TypeEvaluationKind CodeGenFunction::getEvaluationKind(QualType type) {
     case Type::MemberPointer:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::ConstantMatrix:
     case Type::FunctionProto:
     case Type::FunctionNoProto:
     case Type::Enum:
     case Type::ObjCObjectPointer:
     case Type::Pipe:
+    case Type::ExtInt:
       return TEK_Scalar;
 
     // Complexes.
@@ -377,9 +313,15 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   if (HasCleanups) {
     // Make sure the line table doesn't jump back into the body for
     // the ret after it's been at EndLoc.
-    if (CGDebugInfo *DI = getDebugInfo())
+    Optional<ApplyDebugLocation> AL;
+    if (CGDebugInfo *DI = getDebugInfo()) {
       if (OnlySimpleReturnStmts)
         DI->EmitLocation(Builder, EndLoc);
+      else
+        // We may not have a valid end location. Try to apply it anyway, and
+        // fall back to an artificial location if needed.
+        AL = ApplyDebugLocation::CreateDefaultArtificial(*this, EndLoc);
+    }
 
     PopCleanupBlocks(PrologueCleanupDepth);
   }
@@ -479,13 +421,15 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   // Scan function arguments for vector width.
   for (llvm::Argument &A : CurFn->args())
     if (auto *VT = dyn_cast<llvm::VectorType>(A.getType()))
-      LargestVectorWidth = std::max((uint64_t)LargestVectorWidth,
-                                   VT->getPrimitiveSizeInBits().getFixedSize());
+      LargestVectorWidth =
+          std::max((uint64_t)LargestVectorWidth,
+                   VT->getPrimitiveSizeInBits().getKnownMinSize());
 
   // Update vector width based on return type.
   if (auto *VT = dyn_cast<llvm::VectorType>(CurFn->getReturnType()))
-    LargestVectorWidth = std::max((uint64_t)LargestVectorWidth,
-                                  VT->getPrimitiveSizeInBits().getFixedSize());
+    LargestVectorWidth =
+        std::max((uint64_t)LargestVectorWidth,
+                 VT->getPrimitiveSizeInBits().getKnownMinSize());
 
   // Add the required-vector-width attribute. This contains the max width from:
   // 1. min-vector-width attribute used in the source program.
@@ -654,6 +598,13 @@ void CodeGenFunction::markAsIgnoreThreadCheckingAtRuntime(llvm::Function *Fn) {
   }
 }
 
+/// Check if the return value of this function requires sanitization.
+bool CodeGenFunction::requiresReturnValueCheck() const {
+  return requiresReturnValueNullabilityCheck() ||
+         (SanOpts.has(SanitizerKind::ReturnsNonnullAttribute) && CurCodeDecl &&
+          CurCodeDecl->getAttr<ReturnsNonNullAttr>());
+}
+
 static bool matchesStlAllocatorFn(const Decl *D, const ASTContext &Ctx) {
   auto *MD = dyn_cast_or_null<CXXMethodDecl>(D);
   if (!MD || !MD->getDeclName().getAsIdentifierInfo() ||
@@ -786,25 +737,53 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
         SanOpts.Mask &= ~SanitizerKind::Null;
 
   // Apply xray attributes to the function (as a string, for now)
-  if (D) {
-    if (const auto *XRayAttr = D->getAttr<XRayInstrumentAttr>()) {
-      if (CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
-              XRayInstrKind::Function)) {
-        if (XRayAttr->alwaysXRayInstrument() && ShouldXRayInstrumentFunction())
-          Fn->addFnAttr("function-instrument", "xray-always");
-        if (XRayAttr->neverXRayInstrument())
-          Fn->addFnAttr("function-instrument", "xray-never");
-        if (const auto *LogArgs = D->getAttr<XRayLogArgsAttr>())
-          if (ShouldXRayInstrumentFunction())
-            Fn->addFnAttr("xray-log-args",
-                          llvm::utostr(LogArgs->getArgumentCount()));
-      }
-    } else {
-      if (ShouldXRayInstrumentFunction() && !CGM.imbueXRayAttrs(Fn, Loc))
-        Fn->addFnAttr(
-            "xray-instruction-threshold",
-            llvm::itostr(CGM.getCodeGenOpts().XRayInstructionThreshold));
+  if (const auto *XRayAttr = D ? D->getAttr<XRayInstrumentAttr>() : nullptr) {
+    if (CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+            XRayInstrKind::FunctionEntry) ||
+        CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+            XRayInstrKind::FunctionExit)) {
+      if (XRayAttr->alwaysXRayInstrument() && ShouldXRayInstrumentFunction())
+        Fn->addFnAttr("function-instrument", "xray-always");
+      if (XRayAttr->neverXRayInstrument())
+        Fn->addFnAttr("function-instrument", "xray-never");
+      if (const auto *LogArgs = D->getAttr<XRayLogArgsAttr>())
+        if (ShouldXRayInstrumentFunction())
+          Fn->addFnAttr("xray-log-args",
+                        llvm::utostr(LogArgs->getArgumentCount()));
     }
+  } else {
+    if (ShouldXRayInstrumentFunction() && !CGM.imbueXRayAttrs(Fn, Loc))
+      Fn->addFnAttr(
+          "xray-instruction-threshold",
+          llvm::itostr(CGM.getCodeGenOpts().XRayInstructionThreshold));
+  }
+
+  if (ShouldXRayInstrumentFunction()) {
+    if (CGM.getCodeGenOpts().XRayIgnoreLoops)
+      Fn->addFnAttr("xray-ignore-loops");
+
+    if (!CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+            XRayInstrKind::FunctionExit))
+      Fn->addFnAttr("xray-skip-exit");
+
+    if (!CGM.getCodeGenOpts().XRayInstrumentationBundle.has(
+            XRayInstrKind::FunctionEntry))
+      Fn->addFnAttr("xray-skip-entry");
+  }
+
+  unsigned Count, Offset;
+  if (const auto *Attr =
+          D ? D->getAttr<PatchableFunctionEntryAttr>() : nullptr) {
+    Count = Attr->getCount();
+    Offset = Attr->getOffset();
+  } else {
+    Count = CGM.getCodeGenOpts().PatchableFunctionEntryCount;
+    Offset = CGM.getCodeGenOpts().PatchableFunctionEntryOffset;
+  }
+  if (Count && Offset <= Count) {
+    Fn->addFnAttr("patchable-function-entry", std::to_string(Count - Offset));
+    if (Offset)
+      Fn->addFnAttr("patchable-function-prefix", std::to_string(Offset));
   }
 
   // Add no-jump-tables value.
@@ -866,10 +845,26 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   // If we're in C++ mode and the function name is "main", it is guaranteed
   // to be norecurse by the standard (3.6.1.3 "The function main shall not be
   // used within a program").
-  if (getLangOpts().CPlusPlus)
-    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D))
-      if (FD->isMain())
-        Fn->addFnAttr(llvm::Attribute::NoRecurse);
+  //
+  // OpenCL C 2.0 v2.2-11 s6.9.i:
+  //     Recursion is not supported.
+  //
+  // SYCL v1.2.1 s3.10:
+  //     kernels cannot include RTTI information, exception classes,
+  //     recursive code, virtual functions or make use of C++ libraries that
+  //     are not compiled for the device.
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+    if ((getLangOpts().CPlusPlus && FD->isMain()) || getLangOpts().OpenCL ||
+        getLangOpts().SYCLIsDevice ||
+        (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()))
+      Fn->addFnAttr(llvm::Attribute::NoRecurse);
+  }
+
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+    Builder.setIsFPConstrained(FD->usesFPIntrin());
+    if (FD->usesFPIntrin())
+      Fn->addFnAttr(llvm::Attribute::StrictFP);
+  }
 
   // If a custom alignment is used, force realigning to this alignment on
   // any main function which certainly will need it.
@@ -941,16 +936,27 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
                       getTarget().getMCountName());
       }
       if (CGM.getCodeGenOpts().MNopMCount) {
-        if (getContext().getTargetInfo().getTriple().getArch() !=
-            llvm::Triple::systemz)
-          CGM.getDiags().Report(diag::err_opt_not_valid_on_target)
-            << "-mnop-mcount";
         if (!CGM.getCodeGenOpts().CallFEntry)
           CGM.getDiags().Report(diag::err_opt_not_valid_without_opt)
             << "-mnop-mcount" << "-mfentry";
-        Fn->addFnAttr("mnop-mcount", "true");
+        Fn->addFnAttr("mnop-mcount");
+      }
+
+      if (CGM.getCodeGenOpts().RecordMCount) {
+        if (!CGM.getCodeGenOpts().CallFEntry)
+          CGM.getDiags().Report(diag::err_opt_not_valid_without_opt)
+            << "-mrecord-mcount" << "-mfentry";
+        Fn->addFnAttr("mrecord-mcount");
       }
     }
+  }
+
+  if (CGM.getCodeGenOpts().PackedStack) {
+    if (getContext().getTargetInfo().getTriple().getArch() !=
+        llvm::Triple::systemz)
+      CGM.getDiags().Report(diag::err_opt_not_valid_on_target)
+        << "-mpacked-stack";
+    Fn->addFnAttr("packed-stack");
   }
 
   if (RetTy->isVoidType()) {
@@ -983,7 +989,7 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
     llvm::Value *Addr = Builder.CreateStructGEP(nullptr, &*EI, Idx);
     ReturnValuePointer = Address(Addr, getPointerAlign());
     Addr = Builder.CreateAlignedLoad(Addr, getPointerAlign(), "agg.result");
-    ReturnValue = Address(Addr, getNaturalTypeAlignment(RetTy));
+    ReturnValue = Address(Addr, CGM.getNaturalTypeAlignment(RetTy));
   } else {
     ReturnValue = CreateIRTemp(RetTy, "retval");
 
@@ -1024,7 +1030,7 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
         LValue ThisFieldLValue = EmitLValueForLambdaField(LambdaThisCaptureField);
         if (!LambdaThisCaptureField->getType()->isPointerType()) {
           // If the enclosing object was captured by value, just use its address.
-          CXXThisValue = ThisFieldLValue.getAddress().getPointer();
+          CXXThisValue = ThisFieldLValue.getAddress(*this).getPointer();
         } else {
           // Load the lvalue pointed to by the field, since '*this' was captured
           // by reference.
@@ -1940,6 +1946,7 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::Complex:
     case Type::Vector:
     case Type::ExtVector:
+    case Type::ConstantMatrix:
     case Type::Record:
     case Type::Enum:
     case Type::Elaborated:
@@ -1948,6 +1955,7 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
     case Type::ObjCObject:
     case Type::ObjCInterface:
     case Type::ObjCObjectPointer:
+    case Type::ExtInt:
       llvm_unreachable("type class is never variably-modified!");
 
     case Type::Adjusted:
@@ -2061,18 +2069,18 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
 Address CodeGenFunction::EmitVAListRef(const Expr* E) {
   if (getContext().getBuiltinVaListType()->isArrayType())
     return EmitPointerWithAlignment(E);
-  return EmitLValue(E).getAddress();
+  return EmitLValue(E).getAddress(*this);
 }
 
 Address CodeGenFunction::EmitMSVAListRef(const Expr *E) {
-  return EmitLValue(E).getAddress();
+  return EmitLValue(E).getAddress(*this);
 }
 
 void CodeGenFunction::EmitDeclRefExprDbgValue(const DeclRefExpr *E,
                                               const APValue &Init) {
   assert(Init.hasValue() && "Invalid DeclRefExpr initializer!");
   if (CGDebugInfo *Dbg = getDebugInfo())
-    if (CGM.getCodeGenOpts().getDebugInfo() >= codegenoptions::LimitedDebugInfo)
+    if (CGM.getCodeGenOpts().hasReducedDebugInfo())
       Dbg->EmitGlobalVariable(E->getDecl(), Init);
 }
 
@@ -2103,7 +2111,7 @@ void CodeGenFunction::unprotectFromPeepholes(PeepholeProtection protection) {
   protection.Inst->eraseFromParent();
 }
 
-void CodeGenFunction::EmitAlignmentAssumption(llvm::Value *PtrValue,
+void CodeGenFunction::emitAlignmentAssumption(llvm::Value *PtrValue,
                                               QualType Ty, SourceLocation Loc,
                                               SourceLocation AssumptionLoc,
                                               llvm::Value *Alignment,
@@ -2112,12 +2120,12 @@ void CodeGenFunction::EmitAlignmentAssumption(llvm::Value *PtrValue,
   llvm::Instruction *Assumption = Builder.CreateAlignmentAssumption(
       CGM.getDataLayout(), PtrValue, Alignment, OffsetValue, &TheCheck);
   if (SanOpts.has(SanitizerKind::Alignment)) {
-    EmitAlignmentAssumptionCheck(PtrValue, Ty, Loc, AssumptionLoc, Alignment,
+    emitAlignmentAssumptionCheck(PtrValue, Ty, Loc, AssumptionLoc, Alignment,
                                  OffsetValue, TheCheck, Assumption);
   }
 }
 
-void CodeGenFunction::EmitAlignmentAssumption(llvm::Value *PtrValue,
+void CodeGenFunction::emitAlignmentAssumption(llvm::Value *PtrValue,
                                               const Expr *E,
                                               SourceLocation AssumptionLoc,
                                               llvm::Value *Alignment,
@@ -2127,7 +2135,7 @@ void CodeGenFunction::EmitAlignmentAssumption(llvm::Value *PtrValue,
   QualType Ty = E->getType();
   SourceLocation Loc = E->getExprLoc();
 
-  EmitAlignmentAssumption(PtrValue, Ty, Loc, AssumptionLoc, Alignment,
+  emitAlignmentAssumption(PtrValue, Ty, Loc, AssumptionLoc, Alignment,
                           OffsetValue);
 }
 
@@ -2214,7 +2222,7 @@ static bool hasRequiredFeatures(const SmallVectorImpl<StringRef> &ReqFeatures,
   // Now build up the set of caller features and verify that all the required
   // features are there.
   llvm::StringMap<bool> CallerFeatureMap;
-  CGM.getFunctionFeatureMap(CallerFeatureMap, GlobalDecl().getWithDecl(FD));
+  CGM.getContext().getFunctionFeatureMap(CallerFeatureMap, FD);
 
   // If we have at least one of the features in the feature list return
   // true, otherwise return false.
@@ -2271,16 +2279,17 @@ void CodeGenFunction::checkTargetFeatures(SourceLocation Loc,
           << TargetDecl->getDeclName()
           << CGM.getContext().BuiltinInfo.getRequiredFeatures(BuiltinID);
 
-  } else if (TargetDecl->hasAttr<TargetAttr>() ||
-             TargetDecl->hasAttr<CPUSpecificAttr>()) {
+  } else if (!TargetDecl->isMultiVersion() &&
+             TargetDecl->hasAttr<TargetAttr>()) {
     // Get the required features for the callee.
 
     const TargetAttr *TD = TargetDecl->getAttr<TargetAttr>();
-    TargetAttr::ParsedTargetAttr ParsedAttr = CGM.filterFunctionTargetAttrs(TD);
+    ParsedTargetAttr ParsedAttr =
+        CGM.getContext().filterFunctionTargetAttrs(TD);
 
     SmallVector<StringRef, 1> ReqFeatures;
     llvm::StringMap<bool> CalleeFeatureMap;
-    CGM.getFunctionFeatureMap(CalleeFeatureMap, TargetDecl);
+    CGM.getContext().getFunctionFeatureMap(CalleeFeatureMap, TargetDecl);
 
     for (const auto &F : ParsedAttr.Features) {
       if (F[0] == '+' && CalleeFeatureMap.lookup(F.substr(1)))
@@ -2347,10 +2356,7 @@ static void CreateMultiVersionResolverReturn(CodeGenModule &CGM,
 
 void CodeGenFunction::EmitMultiVersionResolver(
     llvm::Function *Resolver, ArrayRef<MultiVersionResolverOption> Options) {
-  assert((getContext().getTargetInfo().getTriple().getArch() ==
-              llvm::Triple::x86 ||
-          getContext().getTargetInfo().getTriple().getArch() ==
-              llvm::Triple::x86_64) &&
+  assert(getContext().getTargetInfo().getTriple().isX86() &&
          "Only implemented for x86 targets");
 
   bool SupportsIFunc = getContext().getTargetInfo().supportsIFunc();
@@ -2396,13 +2402,13 @@ void CodeGenFunction::EmitMultiVersionResolver(
 //  Loc), the diagnostic will additionally point a "Note:" to this location.
 //  It should be the location where the __attribute__((assume_aligned))
 //  was written e.g.
-void CodeGenFunction::EmitAlignmentAssumptionCheck(
+void CodeGenFunction::emitAlignmentAssumptionCheck(
     llvm::Value *Ptr, QualType Ty, SourceLocation Loc,
     SourceLocation SecondaryLoc, llvm::Value *Alignment,
     llvm::Value *OffsetValue, llvm::Value *TheCheck,
     llvm::Instruction *Assumption) {
   assert(Assumption && isa<llvm::CallInst>(Assumption) &&
-         cast<llvm::CallInst>(Assumption)->getCalledValue() ==
+         cast<llvm::CallInst>(Assumption)->getCalledOperand() ==
              llvm::Intrinsic::getDeclaration(
                  Builder.GetInsertBlock()->getParent()->getParent(),
                  llvm::Intrinsic::assume) &&

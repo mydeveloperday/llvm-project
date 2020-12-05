@@ -58,6 +58,11 @@ namespace opts {
                    "--section-groups and --elf-hash-histogram."));
   cl::alias AllShort("a", cl::desc("Alias for --all"), cl::aliasopt(All));
 
+  // --dependent-libraries
+  cl::opt<bool>
+      DependentLibraries("dependent-libraries",
+                         cl::desc("Display the dependent libraries section"));
+
   // --headers -e
   cl::opt<bool>
       Headers("headers",
@@ -366,7 +371,6 @@ LLVM_ATTRIBUTE_NORETURN static void error(Twine Msg) {
   // Flush the standard output to print the error at a
   // proper place.
   fouts().flush();
-  errs() << "\n";
   WithColor::error(errs(), ToolName) << Msg << "\n";
   exit(1);
 }
@@ -390,7 +394,6 @@ void reportWarning(Error Err, StringRef Input) {
   fouts().flush();
   handleAllErrors(
       createFileError(Input, std::move(Err)), [&](const ErrorInfoBase &EI) {
-        errs() << "\n";
         WithColor::warning(errs(), ToolName) << EI.message() << "\n";
       });
 }
@@ -453,8 +456,9 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
     Writer.printString("Format", Obj->getFileFormatName());
     Writer.printString("Arch", Triple::getArchTypeName(
                                    (llvm::Triple::ArchType)Obj->getArch()));
-    Writer.printString("AddressSize",
-                       formatv("{0}bit", 8 * Obj->getBytesInAddress()));
+    Writer.printString(
+        "AddressSize",
+        std::string(formatv("{0}bit", 8 * Obj->getBytesInAddress())));
     Dumper->printLoadName();
   }
 
@@ -462,22 +466,22 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
     Dumper->printFileHeaders();
   if (opts::SectionHeaders)
     Dumper->printSectionHeaders();
-  if (opts::Relocations)
-    Dumper->printRelocations();
-  if (opts::DynRelocs)
-    Dumper->printDynamicRelocations();
-  if (opts::Symbols || opts::DynamicSymbols)
-    Dumper->printSymbols(opts::Symbols, opts::DynamicSymbols);
   if (opts::HashSymbols)
     Dumper->printHashSymbols();
-  if (opts::UnwindInfo)
-    Dumper->printUnwindInfo();
+  if (opts::ProgramHeaders || opts::SectionMapping == cl::BOU_TRUE)
+    Dumper->printProgramHeaders(opts::ProgramHeaders, opts::SectionMapping);
   if (opts::DynamicTable)
     Dumper->printDynamicTable();
   if (opts::NeededLibraries)
     Dumper->printNeededLibraries();
-  if (opts::ProgramHeaders || opts::SectionMapping == cl::BOU_TRUE)
-    Dumper->printProgramHeaders(opts::ProgramHeaders, opts::SectionMapping);
+  if (opts::Relocations)
+    Dumper->printRelocations();
+  if (opts::DynRelocs)
+    Dumper->printDynamicRelocations();
+  if (opts::UnwindInfo)
+    Dumper->printUnwindInfo();
+  if (opts::Symbols || opts::DynamicSymbols)
+    Dumper->printSymbols(opts::Symbols, opts::DynamicSymbols);
   if (!opts::StringDump.empty())
     Dumper->printSectionsAsString(Obj, opts::StringDump);
   if (!opts::HexDump.empty())
@@ -485,10 +489,12 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
   if (opts::HashTable)
     Dumper->printHashTable();
   if (opts::GnuHashTable)
-    Dumper->printGnuHashTable();
+    Dumper->printGnuHashTable(Obj);
   if (opts::VersionInfo)
     Dumper->printVersionInfo();
   if (Obj->isELF()) {
+    if (opts::DependentLibraries)
+      Dumper->printDependentLibs();
     if (opts::ELFLinkerOptions)
       Dumper->printELFLinkerOptions();
     if (opts::ArchSpecificInfo)
@@ -496,7 +502,7 @@ static void dumpObject(const ObjectFile *Obj, ScopedPrinter &Writer,
     if (opts::SectionGroups)
       Dumper->printGroupSections();
     if (opts::HashHistogram)
-      Dumper->printHashHistogram();
+      Dumper->printHashHistograms();
     if (opts::CGProfile)
       Dumper->printCGProfile();
     if (opts::Addrsig)

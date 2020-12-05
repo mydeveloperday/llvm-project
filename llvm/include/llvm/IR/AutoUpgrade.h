@@ -16,6 +16,7 @@
 #include "llvm/ADT/StringRef.h"
 
 namespace llvm {
+  class AttrBuilder;
   class CallInst;
   class Constant;
   class Function;
@@ -90,6 +91,9 @@ namespace llvm {
   /// Upgrade the datalayout string by adding a section for address space
   /// pointers.
   std::string UpgradeDataLayoutString(StringRef DL, StringRef Triple);
+
+  /// Upgrade attributes that changed format or kind.
+  void UpgradeAttributes(AttrBuilder &B);
 
 } // End llvm namespace
 

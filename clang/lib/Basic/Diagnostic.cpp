@@ -61,6 +61,12 @@ const DiagnosticBuilder &clang::operator<<(const DiagnosticBuilder &DB,
   return DB;
 }
 
+const DiagnosticBuilder &clang::operator<<(const DiagnosticBuilder &DB,
+                                           llvm::Error &&E) {
+  DB.AddString(toString(std::move(E)));
+  return DB;
+}
+
 static void DummyArgToStringFn(DiagnosticsEngine::ArgumentKind AK, intptr_t QT,
                             StringRef Modifier, StringRef Argument,
                             ArrayRef<DiagnosticsEngine::ArgumentValue> PrevArgs,
@@ -982,6 +988,7 @@ FormatDiagnostic(const char *DiagStr, const char *DiagEnd,
       llvm::raw_svector_ostream(OutStr) << '\'' << II->getName() << '\'';
       break;
     }
+    case DiagnosticsEngine::ak_addrspace:
     case DiagnosticsEngine::ak_qual:
     case DiagnosticsEngine::ak_qualtype:
     case DiagnosticsEngine::ak_declarationname:

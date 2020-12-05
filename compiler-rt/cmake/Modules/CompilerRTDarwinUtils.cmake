@@ -44,8 +44,11 @@ function(find_darwin_sdk_dir var sdk_name)
 endfunction()
 
 function(find_darwin_sdk_version var sdk_name)
-  # We deliberately don't cache the result here because
-  # CMake's caching causes too many problems.
+  if (DARWIN_${sdk_name}_OVERRIDE_SDK_VERSION)
+    message(WARNING "Overriding ${sdk_name} SDK version to ${DARWIN_${sdk_name}_OVERRIDE_SDK_VERSION}")
+    set(${var} "${DARWIN_${sdk_name}_OVERRIDE_SDK_VERSION}" PARENT_SCOPE)
+    return()
+  endif()
   set(result_process 1)
   if(NOT DARWIN_PREFER_PUBLIC_SDK)
     # Let's first try the internal SDK, otherwise use the public SDK.
@@ -245,7 +248,7 @@ macro(darwin_add_builtin_library name suffix)
   cmake_parse_arguments(LIB
     ""
     "PARENT_TARGET;OS;ARCH"
-    "SOURCES;CFLAGS;DEFS"
+    "SOURCES;CFLAGS;DEFS;INCLUDE_DIRS"
     ${ARGN})
   set(libname "${name}.${suffix}_${LIB_ARCH}_${LIB_OS}")
   add_library(${libname} STATIC ${LIB_SOURCES})
@@ -269,6 +272,8 @@ macro(darwin_add_builtin_library name suffix)
     ${sysroot_flag}
     ${DARWIN_${LIB_OS}_BUILTIN_MIN_VER_FLAG}
     ${builtin_cflags})
+  target_include_directories(${libname}
+    PRIVATE ${LIB_INCLUDE_DIRS})
   set_property(TARGET ${libname} APPEND PROPERTY
       COMPILE_DEFINITIONS ${LIB_DEFS})
   set_target_properties(${libname} PROPERTIES
@@ -373,6 +378,7 @@ macro(darwin_add_builtin_libraries)
                                 SOURCES ${filtered_sources} ${PROFILE_SOURCES}
                                 CFLAGS ${CFLAGS} -arch ${arch} -mkernel
                                 DEFS KERNEL_USE
+                                INCLUDE_DIRS ../../include
                                 PARENT_TARGET builtins)
       endforeach()
       set(archive_name clang_rt.cc_kext_${os})

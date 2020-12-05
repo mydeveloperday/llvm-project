@@ -12,6 +12,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
@@ -120,6 +121,12 @@ TEST_F(IRBuilderTest, Intrinsics) {
   EXPECT_EQ(II->getIntrinsicID(), Intrinsic::fma);
   EXPECT_TRUE(II->hasNoInfs());
   EXPECT_FALSE(II->hasNoNaNs());
+
+  Call = Builder.CreateUnaryIntrinsic(Intrinsic::roundeven, V);
+  II = cast<IntrinsicInst>(Call);
+  EXPECT_EQ(II->getIntrinsicID(), Intrinsic::roundeven);
+  EXPECT_FALSE(II->hasNoInfs());
+  EXPECT_FALSE(II->hasNoNaNs());
 }
 
 TEST_F(IRBuilderTest, IntrinsicsWithScalableVectors) {
@@ -131,7 +138,7 @@ TEST_F(IRBuilderTest, IntrinsicsWithScalableVectors) {
   // with scalable vectors, e.g. LLVMType<nxv4i32>.
   Type *SrcVecTy = VectorType::get(Builder.getHalfTy(), 8, true);
   Type *DstVecTy = VectorType::get(Builder.getInt32Ty(), 4, true);
-  Type *PredTy = VectorType::get(Builder.getInt1Ty(), 16, true);
+  Type *PredTy = VectorType::get(Builder.getInt1Ty(), 4, true);
 
   SmallVector<Value*, 3> ArgTys;
   ArgTys.push_back(UndefValue::get(DstVecTy));
@@ -183,6 +190,8 @@ TEST_F(IRBuilderTest, ConstrainedFP) {
   // See if we get constrained intrinsics instead of non-constrained
   // instructions.
   Builder.setIsFPConstrained(true);
+  auto Parent = BB->getParent();
+  Parent->addFnAttr(Attribute::StrictFP);
 
   V = Builder.CreateFAdd(V, V);
   ASSERT_TRUE(isa<IntrinsicInst>(V));
@@ -219,6 +228,16 @@ TEST_F(IRBuilderTest, ConstrainedFP) {
   II = cast<IntrinsicInst>(VInt);
   EXPECT_EQ(II->getIntrinsicID(), Intrinsic::experimental_constrained_fptosi);
 
+  VDouble = Builder.CreateUIToFP(VInt, Builder.getDoubleTy());
+  ASSERT_TRUE(isa<IntrinsicInst>(VDouble));
+  II = cast<IntrinsicInst>(VDouble);
+  EXPECT_EQ(II->getIntrinsicID(), Intrinsic::experimental_constrained_uitofp);
+
+  VDouble = Builder.CreateSIToFP(VInt, Builder.getDoubleTy());
+  ASSERT_TRUE(isa<IntrinsicInst>(VDouble));
+  II = cast<IntrinsicInst>(VDouble);
+  EXPECT_EQ(II->getIntrinsicID(), Intrinsic::experimental_constrained_sitofp);
+
   V = Builder.CreateFPTrunc(VDouble, Type::getFloatTy(Ctx));
   ASSERT_TRUE(isa<IntrinsicInst>(V));
   II = cast<IntrinsicInst>(V);
@@ -233,7 +252,8 @@ TEST_F(IRBuilderTest, ConstrainedFP) {
   AttributeSet CallAttrs = II->getAttributes().getFnAttributes();
   EXPECT_EQ(CallAttrs.hasAttribute(Attribute::StrictFP), true);
 
-  // Verify attributes on the containing function are created automatically.
+  // Verify attributes on the containing function are created when requested.
+  Builder.setConstrainedFPFunctionAttr();
   AttributeList Attrs = BB->getParent()->getAttributes();
   AttributeSet FnAttrs = Attrs.getFnAttributes();
   EXPECT_EQ(FnAttrs.hasAttribute(Attribute::StrictFP), true);
@@ -243,54 +263,73 @@ TEST_F(IRBuilderTest, ConstrainedFP) {
   ASSERT_TRUE(isa<ConstrainedFPIntrinsic>(V));
   auto *CII = cast<ConstrainedFPIntrinsic>(V);
   EXPECT_EQ(fp::ebStrict, CII->getExceptionBehavior());
-  EXPECT_EQ(fp::rmDynamic, CII->getRoundingMode());
+  EXPECT_EQ(RoundingMode::Dynamic, CII->getRoundingMode());
 
   Builder.setDefaultConstrainedExcept(fp::ebIgnore);
-  Builder.setDefaultConstrainedRounding(fp::rmUpward);
+  Builder.setDefaultConstrainedRounding(RoundingMode::TowardPositive);
   V = Builder.CreateFAdd(V, V);
   CII = cast<ConstrainedFPIntrinsic>(V);
   EXPECT_EQ(fp::ebIgnore, CII->getExceptionBehavior());
-  EXPECT_EQ(CII->getRoundingMode(), fp::rmUpward);
+  EXPECT_EQ(CII->getRoundingMode(), RoundingMode::TowardPositive);
 
   Builder.setDefaultConstrainedExcept(fp::ebIgnore);
-  Builder.setDefaultConstrainedRounding(fp::rmToNearest);
+  Builder.setDefaultConstrainedRounding(RoundingMode::NearestTiesToEven);
   V = Builder.CreateFAdd(V, V);
   CII = cast<ConstrainedFPIntrinsic>(V);
   EXPECT_EQ(fp::ebIgnore, CII->getExceptionBehavior());
-  EXPECT_EQ(fp::rmToNearest, CII->getRoundingMode());
+  EXPECT_EQ(RoundingMode::NearestTiesToEven, CII->getRoundingMode());
 
   Builder.setDefaultConstrainedExcept(fp::ebMayTrap);
-  Builder.setDefaultConstrainedRounding(fp::rmDownward);
+  Builder.setDefaultConstrainedRounding(RoundingMode::TowardNegative);
   V = Builder.CreateFAdd(V, V);
   CII = cast<ConstrainedFPIntrinsic>(V);
   EXPECT_EQ(fp::ebMayTrap, CII->getExceptionBehavior());
-  EXPECT_EQ(fp::rmDownward, CII->getRoundingMode());
+  EXPECT_EQ(RoundingMode::TowardNegative, CII->getRoundingMode());
 
   Builder.setDefaultConstrainedExcept(fp::ebStrict);
-  Builder.setDefaultConstrainedRounding(fp::rmTowardZero);
+  Builder.setDefaultConstrainedRounding(RoundingMode::TowardZero);
   V = Builder.CreateFAdd(V, V);
   CII = cast<ConstrainedFPIntrinsic>(V);
   EXPECT_EQ(fp::ebStrict, CII->getExceptionBehavior());
-  EXPECT_EQ(fp::rmTowardZero, CII->getRoundingMode());
+  EXPECT_EQ(RoundingMode::TowardZero, CII->getRoundingMode());
 
   Builder.setDefaultConstrainedExcept(fp::ebIgnore);
-  Builder.setDefaultConstrainedRounding(fp::rmDynamic);
+  Builder.setDefaultConstrainedRounding(RoundingMode::Dynamic);
   V = Builder.CreateFAdd(V, V);
   CII = cast<ConstrainedFPIntrinsic>(V);
   EXPECT_EQ(fp::ebIgnore, CII->getExceptionBehavior());
-  EXPECT_EQ(fp::rmDynamic, CII->getRoundingMode());
+  EXPECT_EQ(RoundingMode::Dynamic, CII->getRoundingMode());
 
   // Now override the defaults.
   Call = Builder.CreateConstrainedFPBinOp(
         Intrinsic::experimental_constrained_fadd, V, V, nullptr, "", nullptr,
-        fp::rmDownward, fp::ebMayTrap);
+        RoundingMode::TowardNegative, fp::ebMayTrap);
   CII = cast<ConstrainedFPIntrinsic>(Call);
   EXPECT_EQ(CII->getIntrinsicID(), Intrinsic::experimental_constrained_fadd);
   EXPECT_EQ(fp::ebMayTrap, CII->getExceptionBehavior());
-  EXPECT_EQ(fp::rmDownward, CII->getRoundingMode());
+  EXPECT_EQ(RoundingMode::TowardNegative, CII->getRoundingMode());
 
   Builder.CreateRetVoid();
   EXPECT_FALSE(verifyModule(*M));
+}
+
+TEST_F(IRBuilderTest, ConstrainedFPIntrinsics) {
+  IRBuilder<> Builder(BB);
+  Value *V;
+  Value *VDouble;
+  ConstrainedFPIntrinsic *CII;
+  GlobalVariable *GVDouble = new GlobalVariable(
+      *M, Type::getDoubleTy(Ctx), true, GlobalValue::ExternalLinkage, nullptr);
+  VDouble = Builder.CreateLoad(GVDouble->getValueType(), GVDouble);
+
+  Builder.setDefaultConstrainedExcept(fp::ebStrict);
+  Builder.setDefaultConstrainedRounding(RoundingMode::TowardZero);
+  Function *Fn = Intrinsic::getDeclaration(M.get(),
+      Intrinsic::experimental_constrained_roundeven, { Type::getDoubleTy(Ctx) });
+  V = Builder.CreateConstrainedFPCall(Fn, { VDouble });
+  CII = cast<ConstrainedFPIntrinsic>(V);
+  EXPECT_EQ(Intrinsic::experimental_constrained_roundeven, CII->getIntrinsicID());
+  EXPECT_EQ(fp::ebStrict, CII->getExceptionBehavior());
 }
 
 TEST_F(IRBuilderTest, Lifetime) {
@@ -914,5 +953,12 @@ TEST_F(IRBuilderTest, DIBuilderMacro) {
   auto MN2 = MDTuple::get(Ctx, Elements);
   EXPECT_EQ(MN2, MF2->getRawElements());
   EXPECT_TRUE(verifyModule(*M));
+}
+
+TEST_F(IRBuilderTest, NoFolderNames) {
+  IRBuilder<NoFolder> Builder(BB);
+  auto *Add =
+      Builder.CreateAdd(Builder.getInt32(1), Builder.getInt32(2), "add");
+  EXPECT_EQ(Add->getName(), "add");
 }
 }

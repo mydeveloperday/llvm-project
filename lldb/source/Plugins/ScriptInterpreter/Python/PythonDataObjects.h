@@ -36,7 +36,7 @@
 //   can never fail to assert instead, such as the creation of
 //   PythonString from a string literal.
 //
-// * Elimintate Reset(), and make all non-default constructors private.
+// * Eliminate Reset(), and make all non-default constructors private.
 //   Python objects should be created with Retain<> or Take<>, and they
 //   should be assigned with operator=
 //
@@ -48,7 +48,9 @@
 #ifndef LLDB_PLUGINS_SCRIPTINTERPRETER_PYTHON_PYTHONDATAOBJECTS_H
 #define LLDB_PLUGINS_SCRIPTINTERPRETER_PYTHON_PYTHONDATAOBJECTS_H
 
-#ifndef LLDB_DISABLE_PYTHON
+#include "lldb/Host/Config.h"
+
+#if LLDB_ENABLE_PYTHON
 
 // LLDB Python header must be included first
 #include "lldb-python.h"
@@ -358,15 +360,12 @@ public:
     return !!r;
   }
 
-  llvm::Expected<long long> AsLongLong() {
-    if (!m_py_obj)
-      return nullDeref();
-    assert(!PyErr_Occurred());
-    long long r = PyLong_AsLongLong(m_py_obj);
-    if (PyErr_Occurred())
-      return exception();
-    return r;
-  }
+  llvm::Expected<long long> AsLongLong() const;
+
+  llvm::Expected<long long> AsUnsignedLongLong() const;
+
+  // wraps on overflow, instead of raising an error.
+  llvm::Expected<unsigned long long> AsModuloUnsignedLongLong() const;
 
   llvm::Expected<bool> IsInstance(const PythonObject &cls) {
     if (!m_py_obj || !cls.IsValid())
@@ -396,6 +395,10 @@ template <> llvm::Expected<bool> As<bool>(llvm::Expected<PythonObject> &&obj);
 
 template <>
 llvm::Expected<long long> As<long long>(llvm::Expected<PythonObject> &&obj);
+
+template <>
+llvm::Expected<unsigned long long>
+As<unsigned long long>(llvm::Expected<PythonObject> &&obj);
 
 template <>
 llvm::Expected<std::string> As<std::string>(llvm::Expected<PythonObject> &&obj);
@@ -488,8 +491,6 @@ public:
 
   static bool Check(PyObject *py_obj);
   static void Convert(PyRefType &type, PyObject *&py_obj);
-
-  int64_t GetInteger() const;
 
   void SetInteger(int64_t value);
 
@@ -593,7 +594,7 @@ public:
 
   // safe, returns invalid on error;
   static PythonModule ImportModule(llvm::StringRef name) {
-    std::string s = name;
+    std::string s = std::string(name);
     auto mod = Import(s.c_str());
     if (!mod) {
       llvm::consumeError(mod.takeError());

@@ -45,7 +45,7 @@ attributes #1 = { nounwind readnone speculatable willreturn }
 !llvm.ident = !{!6}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 10.0.0 ", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, nameTableKind: None)
-!1 = !DIFile(filename: "/dir/test.cpp", directory: "/home/awpandey/tools/llvm/test/DebugInfo", checksumkind: CSK_MD5, checksum: "872e252efdfcb9480b4bfaf8437f58ab")
+!1 = !DIFile(filename: "/dir/test.cpp", directory: "/dir/", checksumkind: CSK_MD5, checksum: "872e252efdfcb9480b4bfaf8437f58ab")
 !2 = !{}
 !3 = !{i32 2, !"Dwarf Version", i32 5}
 !4 = !{i32 2, !"Debug Info Version", i32 3}

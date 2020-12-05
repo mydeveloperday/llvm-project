@@ -1,4 +1,4 @@
-// RUN: %clang_analyze_cc1 -verify %s \
+// RUN: %clang_analyze_cc1 -w -verify %s \
 // RUN:   -analyzer-checker=core \
 // RUN:   -analyzer-checker=unix.cstring.NullArg \
 // RUN:   -analyzer-checker=alpha.unix.cstring \
@@ -29,15 +29,15 @@ void f2() {
 void f3() {
   char dst[2];
   const char *src = "abdef";
-  strlcpy(dst, src, 5); // expected-warning{{Size argument is greater than the length of the destination buffer}}
+  strlcpy(dst, src, 5); // expected-warning{{String copy function overflows the destination buffer}}
 }
 
 void f4() {
-  strlcpy(NULL, "abcdef", 6); // expected-warning{{Null pointer argument in call to string copy function}}
+  strlcpy(NULL, "abcdef", 6); // expected-warning{{Null pointer passed as 1st argument to string copy function}}
 }
 
 void f5() {
-  strlcat(NULL, "abcdef", 6); // expected-warning{{Null pointer argument in call to string copy function}}
+  strlcat(NULL, "abcdef", 6); // expected-warning{{Null pointer passed as 1st argument to string concatenation function}}
 }
 
 void f6() {
@@ -112,7 +112,8 @@ void f9(int unknown_size, char* unknown_src, char* unknown_dst){
   clang_analyzer_eval(strlen(unknown_dst));// expected-warning{{UNKNOWN}}
 
   //size is unknown
-  len = strlcat(buf+2,unknown_src+1, sizeof(buf));// expected-warning{{Size argument is greater than the length of the destination buffer}};
+  len = strlcat(buf + 2, unknown_src + 1, sizeof(buf));
+  // expected-warning@-1 {{String concatenation function overflows the destination buffer}}
 }
 
 void f10(){
@@ -121,7 +122,8 @@ void f10(){
 
   len = strlcpy(buf,"abba",sizeof(buf));
   clang_analyzer_eval(len==4);// expected-warning{{TRUE}}
-  strlcat(buf, "efghi",9);// expected-warning{{Size argument is greater than the length of the destination buffer}}
+  strlcat(buf, "efghi", 9);
+  // expected-warning@-1 {{String concatenation function overflows the destination buffer}}
 }
 
 void f11() {
@@ -130,4 +132,10 @@ void f11() {
   strlcpy(a, "world", sizeof(a));
   strlcpy(b, "hello ", sizeof(b));
   strlcat(b, a, sizeof(b)); // no-warning
+}
+
+int a, b;
+void unknown_val_crash() {
+  // We're unable to evaluate the integer-to-pointer cast.
+  strlcat(&b, a, 0); // no-crash
 }

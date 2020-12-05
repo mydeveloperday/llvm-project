@@ -1,4 +1,4 @@
-//===-- VOP2Instructions.td - Vector Instruction Defintions ---------------===//
+//===-- VOP2Instructions.td - Vector Instruction Definitions --------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -69,9 +69,14 @@ class VOP2_Pseudo <string opName, VOPProfile P, list<dag> pattern=[], string suf
   let mayStore = 0;
   let hasSideEffects = 0;
 
+  let ReadsModeReg = !or(isFloatType<P.DstVT>.ret, isFloatType<P.Src0VT>.ret);
+
+  // FIXME: Set this
+  // let mayRaiseFPException = ReadsModeReg;
+
   let VOP2 = 1;
   let VALU = 1;
-  let Uses = [EXEC];
+  let Uses = !if(ReadsModeReg, [MODE, EXEC], [EXEC]);
 
   let AsmVariantName = AMDGPUAsmVariants.Default;
 }
@@ -467,9 +472,9 @@ defm V_SUB_F32 : VOP2Inst <"v_sub_f32", VOP_F32_F32_F32, fsub>;
 defm V_SUBREV_F32 : VOP2Inst <"v_subrev_f32", VOP_F32_F32_F32, null_frag, "v_sub_f32">;
 defm V_MUL_LEGACY_F32 : VOP2Inst <"v_mul_legacy_f32", VOP_F32_F32_F32, AMDGPUfmul_legacy>;
 defm V_MUL_F32 : VOP2Inst <"v_mul_f32", VOP_F32_F32_F32, fmul>;
-defm V_MUL_I32_I24 : VOP2Inst <"v_mul_i32_i24", VOP_PAT_GEN<VOP_I32_I32_I32, 2>, AMDGPUmul_i24>;
+defm V_MUL_I32_I24 : VOP2Inst <"v_mul_i32_i24", VOP_I32_I32_I32_ARITH, AMDGPUmul_i24>;
 defm V_MUL_HI_I32_I24 : VOP2Inst <"v_mul_hi_i32_i24", VOP_PAT_GEN<VOP_I32_I32_I32, 2>, AMDGPUmulhi_i24>;
-defm V_MUL_U32_U24 : VOP2Inst <"v_mul_u32_u24", VOP_PAT_GEN<VOP_I32_I32_I32, 2>, AMDGPUmul_u24>;
+defm V_MUL_U32_U24 : VOP2Inst <"v_mul_u32_u24", VOP_I32_I32_I32_ARITH, AMDGPUmul_u24>;
 defm V_MUL_HI_U32_U24 : VOP2Inst <"v_mul_hi_u32_u24", VOP_PAT_GEN<VOP_I32_I32_I32, 2>, AMDGPUmulhi_u24>;
 defm V_MIN_F32 : VOP2Inst <"v_min_f32", VOP_F32_F32_F32, fminnum_like>;
 defm V_MAX_F32 : VOP2Inst <"v_max_f32", VOP_F32_F32_F32, fmaxnum_like>;
@@ -529,8 +534,12 @@ defm V_MBCNT_LO_U32_B32 : VOP2Inst <"v_mbcnt_lo_u32_b32", VOP_NO_EXT<VOP_I32_I32
 defm V_MBCNT_HI_U32_B32 : VOP2Inst <"v_mbcnt_hi_u32_b32", VOP_NO_EXT<VOP_I32_I32_I32>, int_amdgcn_mbcnt_hi>;
 defm V_LDEXP_F32 : VOP2Inst <"v_ldexp_f32", VOP_NO_EXT<VOP_F32_F32_I32>, AMDGPUldexp>;
 defm V_CVT_PKACCUM_U8_F32 : VOP2Inst <"v_cvt_pkaccum_u8_f32", VOP_NO_EXT<VOP_I32_F32_I32>>; // TODO: set "Uses = dst"
+
+let ReadsModeReg = 0, mayRaiseFPException = 0 in {
 defm V_CVT_PKNORM_I16_F32 : VOP2Inst <"v_cvt_pknorm_i16_f32", VOP_NO_EXT<VOP_V2I16_F32_F32>, AMDGPUpknorm_i16_f32>;
 defm V_CVT_PKNORM_U16_F32 : VOP2Inst <"v_cvt_pknorm_u16_f32", VOP_NO_EXT<VOP_V2I16_F32_F32>, AMDGPUpknorm_u16_f32>;
+}
+
 defm V_CVT_PKRTZ_F16_F32 : VOP2Inst <"v_cvt_pkrtz_f16_f32", VOP_NO_EXT<VOP_V2F16_F32_F32>, AMDGPUpkrtz_f16_f32>;
 defm V_CVT_PK_U16_U32 : VOP2Inst <"v_cvt_pk_u16_u32", VOP_NO_EXT<VOP_V2I16_I32_I32>, AMDGPUpk_u16_u32>;
 defm V_CVT_PK_I16_I32 : VOP2Inst <"v_cvt_pk_i16_i32", VOP_NO_EXT<VOP_V2I16_I32_I32>, AMDGPUpk_i16_i32>;
@@ -541,14 +550,17 @@ defm V_MIN_LEGACY_F32 : VOP2Inst <"v_min_legacy_f32", VOP_F32_F32_F32, AMDGPUfmi
 defm V_MAX_LEGACY_F32 : VOP2Inst <"v_max_legacy_f32", VOP_F32_F32_F32, AMDGPUfmax_legacy>;
 } // End SubtargetPredicate = isGFX6GFX7
 
-let SubtargetPredicate = isGFX6GFX7GFX10 in {
 let isCommutable = 1 in {
+let SubtargetPredicate = isGFX6GFX7GFX10 in {
 defm V_MAC_LEGACY_F32 : VOP2Inst <"v_mac_legacy_f32", VOP_F32_F32_F32>;
-defm V_LSHR_B32 : VOP2Inst <"v_lshr_b32", VOP_I32_I32_I32, srl>;
-defm V_ASHR_I32 : VOP2Inst <"v_ashr_i32", VOP_I32_I32_I32, sra>;
-defm V_LSHL_B32 : VOP2Inst <"v_lshl_b32", VOP_I32_I32_I32, shl>;
-} // End isCommutable = 1
 } // End SubtargetPredicate = isGFX6GFX7GFX10
+let SubtargetPredicate = isGFX6GFX7 in {
+defm V_LSHR_B32 : VOP2Inst <"v_lshr_b32", VOP_PAT_GEN<VOP_I32_I32_I32>, srl>;
+defm V_ASHR_I32 : VOP2Inst <"v_ashr_i32", VOP_PAT_GEN<VOP_I32_I32_I32>, sra>;
+defm V_LSHL_B32 : VOP2Inst <"v_lshl_b32", VOP_PAT_GEN<VOP_I32_I32_I32>, shl>;
+} // End SubtargetPredicate = isGFX6GFX7
+} // End isCommutable = 1
+
 
 class DivergentBinOp<SDPatternOperator Op, VOP_Pseudo Inst> :
   GCNPat<
@@ -623,9 +635,9 @@ defm V_SUBREV_F16 : VOP2Inst <"v_subrev_f16", VOP_F16_F16_F16, null_frag, "v_sub
 defm V_MUL_F16 : VOP2Inst <"v_mul_f16", VOP_F16_F16_F16, fmul>;
 def V_MADAK_F16 : VOP2_Pseudo <"v_madak_f16", VOP_MADAK_F16, [], "">;
 } // End FPDPRounding = 1
-defm V_ADD_U16 : VOP2Inst <"v_add_u16", VOP_I16_I16_I16, add>;
-defm V_SUB_U16 : VOP2Inst <"v_sub_u16" , VOP_I16_I16_I16, sub>;
-defm V_SUBREV_U16 : VOP2Inst <"v_subrev_u16", VOP_I16_I16_I16, null_frag, "v_sub_u16">;
+defm V_ADD_U16 : VOP2Inst <"v_add_u16", VOP_I16_I16_I16_ARITH, add>;
+defm V_SUB_U16 : VOP2Inst <"v_sub_u16" , VOP_I16_I16_I16_ARITH, sub>;
+defm V_SUBREV_U16 : VOP2Inst <"v_subrev_u16", VOP_I16_I16_I16_ARITH, null_frag, "v_sub_u16">;
 defm V_MUL_LO_U16 : VOP2Inst <"v_mul_lo_u16", VOP_I16_I16_I16, mul>;
 defm V_MAX_F16 : VOP2Inst <"v_max_f16", VOP_F16_F16_F16, fmaxnum_like>;
 defm V_MIN_F16 : VOP2Inst <"v_min_f16", VOP_F16_F16_F16, fminnum_like>;
@@ -729,7 +741,7 @@ multiclass Arithmetic_i16_0Hi_Pats <SDPatternOperator op, Instruction inst> {
 
 def : GCNPat<
   (i32 (zext (op i16:$src0, i16:$src1))),
-  (inst $src0, $src1)
+  (inst VSrc_b16:$src0, VSrc_b16:$src1)
 >;
 
 def : GCNPat<
@@ -766,7 +778,22 @@ def : GCNPat <
 
 let Predicates = [Has16BitInsts] in {
 
+// Undo sub x, c -> add x, -c canonicalization since c is more likely
+// an inline immediate than -c.
+// TODO: Also do for 64-bit.
+def : GCNPat<
+  (add i16:$src0, (i16 NegSubInlineConst16:$src1)),
+  (V_SUB_U16_e64 VSrc_b16:$src0, NegSubInlineConst16:$src1)
+>;
+
+
 let Predicates = [Has16BitInsts, isGFX7GFX8GFX9] in {
+
+def : GCNPat<
+  (i32 (zext (add i16:$src0, (i16 NegSubInlineConst16:$src1)))),
+  (V_SUB_U16_e64 VSrc_b16:$src0, NegSubInlineConst16:$src1)
+>;
+
 defm : Arithmetic_i16_0Hi_Pats<add, V_ADD_U16_e64>;
 defm : Arithmetic_i16_0Hi_Pats<mul, V_MUL_LO_U16_e64>;
 defm : Arithmetic_i16_0Hi_Pats<sub, V_SUB_U16_e64>;
@@ -777,7 +804,7 @@ defm : Arithmetic_i16_0Hi_Pats<umax, V_MAX_U16_e64>;
 defm : Arithmetic_i16_0Hi_Pats<lshl_rev, V_LSHLREV_B16_e64>;
 defm : Arithmetic_i16_0Hi_Pats<lshr_rev, V_LSHRREV_B16_e64>;
 defm : Arithmetic_i16_0Hi_Pats<ashr_rev, V_ASHRREV_I16_e64>;
-}
+}  // End Predicates = [Has16BitInsts, isGFX7GFX8GFX9]
 
 def : ZExt_i16_i1_Pat<zext>;
 def : ZExt_i16_i1_Pat<anyext>;
@@ -788,15 +815,7 @@ def : GCNPat <
                      /*src1mod*/(i32 0), /*src1*/(i32 -1), $src)
 >;
 
-// Undo sub x, c -> add x, -c canonicalization since c is more likely
-// an inline immediate than -c.
-// TODO: Also do for 64-bit.
-def : GCNPat<
-  (add i16:$src0, (i16 NegSubInlineConst16:$src1)),
-  (V_SUB_U16_e64 $src0, NegSubInlineConst16:$src1)
->;
-
-} // End Predicates = [Has16BitInsts, isGFX7GFX8GFX9]
+} // End Predicates = [Has16BitInsts]
 
 
 //===----------------------------------------------------------------------===//
@@ -824,7 +843,7 @@ class VOP2_DPP<bits<6> op, VOP2_DPP_Pseudo ps,
 class Base_VOP2_DPP16<bits<6> op, VOP2_DPP_Pseudo ps,
                  string opName = ps.OpName, VOPProfile p = ps.Pfl> :
     VOP2_DPP<op, ps, opName, p, 1> {
-  let AssemblerPredicate = !if(p.HasExt, HasDPP16, DisableInst);
+  let AssemblerPredicate = HasDPP16;
   let SubtargetPredicate = HasDPP16;
 }
 
@@ -850,7 +869,7 @@ class VOP2_DPP8<bits<6> op, VOP2_Pseudo ps,
   let Inst{30-25} = op;
   let Inst{31}    = 0x0;
 
-  let AssemblerPredicate = !if(p.HasExt, HasDPP8, DisableInst);
+  let AssemblerPredicate = HasDPP8;
   let SubtargetPredicate = HasDPP8;
 }
 

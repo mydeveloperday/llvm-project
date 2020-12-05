@@ -42,7 +42,6 @@ class DIExpression;
 class DILocalVariable;
 class MachineBasicBlock;
 class MachineFunction;
-class MachineMemOperand;
 class MachineRegisterInfo;
 class ModuleSlotTracker;
 class raw_ostream;
@@ -104,8 +103,8 @@ public:
                                         // no signed wrap.
     IsExact      = 1 << 13,             // Instruction supports division is
                                         // known to be exact.
-    FPExcept     = 1 << 14,             // Instruction may raise floating-point
-                                        // exceptions.
+    NoFPExcept   = 1 << 14,             // Instruction does not raise
+                                        // floatint-point exceptions.
   };
 
 private:
@@ -115,8 +114,6 @@ private:
   // Operands are allocated by an ArrayRecycler.
   MachineOperand *Operands = nullptr;   // Pointer to the first operand.
   unsigned NumOperands = 0;             // Number of operands on instruction.
-  using OperandCapacity = ArrayRecycler<MachineOperand>::Capacity;
-  OperandCapacity CapOperands;          // Capacity of the Operands array.
 
   uint16_t Flags = 0;                   // Various bits of additional
                                         // information about machine
@@ -128,6 +125,11 @@ private:
                                         // information.  Do not use this for
                                         // anything other than to convey comment
                                         // information to AsmPrinter.
+
+  // OperandCapacity has uint8_t size, so it should be next to AsmPrinterFlags
+  // to properly pack.
+  using OperandCapacity = ArrayRecycler<MachineOperand>::Capacity;
+  OperandCapacity CapOperands;          // Capacity of the Operands array.
 
   /// Internal implementation detail class that provides out-of-line storage for
   /// extra info used by the machine instruction when this info cannot be stored
@@ -261,6 +263,10 @@ private:
 
   // MachineInstrs are pool-allocated and owned by MachineFunction.
   friend class MachineFunction;
+
+  void
+  dumprImpl(const MachineRegisterInfo &MRI, unsigned Depth, unsigned MaxDepth,
+            SmallPtrSetImpl<const MachineInstr *> &AlreadySeenInstrs) const;
 
 public:
   MachineInstr(const MachineInstr &) = delete;
@@ -683,6 +689,14 @@ public:
     return hasProperty(MCID::Call, Type);
   }
 
+  /// Return true if this is a call instruction that may have an associated
+  /// call site entry in the debug info.
+  bool isCandidateForCallSiteEntry(QueryType Type = IgnoreBundle) const;
+  /// Return true if copying, moving, or erasing this instruction requires
+  /// updating Call Site Info (see \ref copyCallSiteInfo, \ref moveCallSiteInfo,
+  /// \ref eraseCallSiteInfo).
+  bool shouldUpdateCallSiteInfo() const;
+
   /// Returns true if the specified instruction stops control flow
   /// from executing the instruction immediately following it.  Examples include
   /// unconditional branches and return instructions.
@@ -701,7 +715,7 @@ public:
 
   /// Returns true if this is a conditional, unconditional, or indirect branch.
   /// Predicates below can be used to discriminate between
-  /// these cases, and the TargetInstrInfo::AnalyzeBranch method can be used to
+  /// these cases, and the TargetInstrInfo::analyzeBranch method can be used to
   /// get more information.
   bool isBranch(QueryType Type = AnyInBundle) const {
     return hasProperty(MCID::Branch, Type);
@@ -715,7 +729,7 @@ public:
 
   /// Return true if this is a branch which may fall
   /// through to the next instruction or may transfer control flow to some other
-  /// block.  The TargetInstrInfo::AnalyzeBranch method can be used to get more
+  /// block.  The TargetInstrInfo::analyzeBranch method can be used to get more
   /// information about this branch.
   bool isConditionalBranch(QueryType Type = AnyInBundle) const {
     return isBranch(Type) && !isBarrier(Type) && !isIndirectBranch(Type);
@@ -723,7 +737,7 @@ public:
 
   /// Return true if this is a branch which always
   /// transfers control flow to some other block.  The
-  /// TargetInstrInfo::AnalyzeBranch method can be used to get more information
+  /// TargetInstrInfo::analyzeBranch method can be used to get more information
   /// about this branch.
   bool isUnconditionalBranch(QueryType Type = AnyInBundle) const {
     return isBranch(Type) && isBarrier(Type) && !isIndirectBranch(Type);
@@ -885,10 +899,10 @@ public:
   /// instruction that can in principle raise an exception, as indicated
   /// by the MCID::MayRaiseFPException property, *and* at the same time,
   /// the instruction is used in a context where we expect floating-point
-  /// exceptions might be enabled, as indicated by the FPExcept MI flag.
+  /// exceptions are not disabled, as indicated by the NoFPExcept MI flag.
   bool mayRaiseFPException() const {
     return hasProperty(MCID::MayRaiseFPException) &&
-           getFlag(MachineInstr::MIFlag::FPExcept);
+           !getFlag(MachineInstr::MIFlag::NoFPExcept);
   }
 
   //===--------------------------------------------------------------------===//
@@ -1530,6 +1544,10 @@ public:
              bool AddNewLine = true,
              const TargetInstrInfo *TII = nullptr) const;
   void dump() const;
+  /// Print on dbgs() the current instruction and the instructions defining its
+  /// operands and so on until we reach \p MaxDepth.
+  void dumpr(const MachineRegisterInfo &MRI,
+             unsigned MaxDepth = UINT_MAX) const;
   /// @}
 
   //===--------------------------------------------------------------------===//
@@ -1651,7 +1669,8 @@ public:
   /// Add all implicit def and use operands to this instruction.
   void addImplicitDefUseOperands(MachineFunction &MF);
 
-  /// Scan instructions following MI and collect any matching DBG_VALUEs.
+  /// Scan instructions immediately following MI and collect any matching
+  /// DBG_VALUEs.
   void collectDebugValues(SmallVectorImpl<MachineInstr *> &DbgValues);
 
   /// Find all DBG_VALUEs that point to the register def in this instruction

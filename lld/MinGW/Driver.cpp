@@ -42,6 +42,7 @@
 #include "llvm/Option/Option.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 
 #if !defined(_MSC_VER) && !defined(__MINGW32__)
@@ -83,9 +84,9 @@ public:
 
 static void printHelp(const char *argv0) {
   MinGWOptTable().PrintHelp(
-      outs(), (std::string(argv0) + " [options] file...").c_str(), "lld",
+      lld::outs(), (std::string(argv0) + " [options] file...").c_str(), "lld",
       false /*ShowHidden*/, true /*ShowAllAliases*/);
-  outs() << "\n";
+  lld::outs() << "\n";
 }
 
 static cl::TokenizerCallback getQuotingStyle() {
@@ -114,7 +115,7 @@ static Optional<std::string> findFile(StringRef path1, const Twine &path2) {
   SmallString<128> s;
   sys::path::append(s, path1, path2);
   if (sys::fs::exists(s))
-    return s.str().str();
+    return std::string(s);
   return None;
 }
 
@@ -159,8 +160,12 @@ searchLibrary(StringRef name, ArrayRef<StringRef> searchPaths, bool bStatic) {
 
 // Convert Unix-ish command line arguments to Windows-ish ones and
 // then call coff::link.
-bool mingw::link(ArrayRef<const char *> argsArr, raw_ostream &diag) {
-  enableColors(diag.has_colors());
+bool mingw::link(ArrayRef<const char *> argsArr, bool canExitEarly,
+                 raw_ostream &stdoutOS, raw_ostream &stderrOS) {
+  lld::stdoutOS = &stdoutOS;
+  lld::stderrOS = &stderrOS;
+
+  stderrOS.enable_colors(stderrOS.has_colors());
 
   MinGWOptTable parser;
   opt::InputArgList args = parser.parse(argsArr.slice(1));
@@ -244,6 +249,8 @@ bool mingw::link(ArrayRef<const char *> argsArr, raw_ostream &diag) {
     add("-lldmap:" + StringRef(a->getValue()));
   if (auto *a = args.getLastArg(OPT_reproduce))
     add("-reproduce:" + StringRef(a->getValue()));
+  if (auto *a = args.getLastArg(OPT_thinlto_cache_dir))
+    add("-lldltocache:" + StringRef(a->getValue()));
 
   if (auto *a = args.getLastArg(OPT_o))
     add("-out:" + StringRef(a->getValue()));
@@ -289,6 +296,16 @@ bool mingw::link(ArrayRef<const char *> argsArr, raw_ostream &diag) {
     add("-opt:ref");
   else
     add("-opt:noref");
+
+  if (args.hasFlag(OPT_enable_auto_import, OPT_disable_auto_import, true))
+    add("-auto-import");
+  else
+    add("-auto-import:no");
+  if (args.hasFlag(OPT_enable_runtime_pseudo_reloc,
+                   OPT_disable_runtime_pseudo_reloc, true))
+    add("-runtime-pseudo-reloc");
+  else
+    add("-runtime-pseudo-reloc:no");
 
   if (auto *a = args.getLastArg(OPT_icf)) {
     StringRef s = a->getValue();
@@ -372,7 +389,7 @@ bool mingw::link(ArrayRef<const char *> argsArr, raw_ostream &diag) {
     return false;
 
   if (args.hasArg(OPT_verbose) || args.hasArg(OPT__HASH_HASH_HASH))
-    outs() << llvm::join(linkArgs, " ") << "\n";
+    lld::outs() << llvm::join(linkArgs, " ") << "\n";
 
   if (args.hasArg(OPT__HASH_HASH_HASH))
     return true;
@@ -381,5 +398,5 @@ bool mingw::link(ArrayRef<const char *> argsArr, raw_ostream &diag) {
   std::vector<const char *> vec;
   for (const std::string &s : linkArgs)
     vec.push_back(s.c_str());
-  return coff::link(vec, true);
+  return coff::link(vec, true, stdoutOS, stderrOS);
 }

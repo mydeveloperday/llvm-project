@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CallingConvLower.h"
+#include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/IR/Function.h"
@@ -25,6 +26,10 @@
 #include <cassert>
 
 namespace llvm {
+
+namespace yaml {
+struct AArch64FunctionInfo;
+} // end namespace yaml
 
 class MachineInstr;
 
@@ -52,7 +57,7 @@ class AArch64FunctionInfo final : public MachineFunctionInfo {
   bool HasStackFrame = false;
 
   /// Amount of stack frame size, not including callee-saved registers.
-  unsigned LocalStackSize = 0;
+  uint64_t LocalStackSize = 0;
 
   /// The start and end frame indices for the SVE callee saves.
   int MinSVECSFrameIndex = 0;
@@ -126,6 +131,10 @@ class AArch64FunctionInfo final : public MachineFunctionInfo {
   // stack slot.
   unsigned TaggedBasePointerOffset = 0;
 
+  /// OutliningStyle denotes, if a function was outined, how it was outlined,
+  /// e.g. Tail Call, Thunk, or Function if none apply.
+  Optional<std::string> OutliningStyle;
+
 public:
   AArch64FunctionInfo() = default;
 
@@ -137,6 +146,7 @@ public:
     if (MF.getFunction().hasFnAttribute(Attribute::NoRedZone))
       HasRedZone = false;
   }
+  void initializeBaseYamlFields(const yaml::AArch64FunctionInfo &YamlMFI);
 
   unsigned getBytesInStackArgArea() const { return BytesInStackArgArea; }
   void setBytesInStackArgArea(unsigned bytes) { BytesInStackArgArea = bytes; }
@@ -170,8 +180,11 @@ public:
   bool isSplitCSR() const { return IsSplitCSR; }
   void setIsSplitCSR(bool s) { IsSplitCSR = s; }
 
-  void setLocalStackSize(unsigned Size) { LocalStackSize = Size; }
-  unsigned getLocalStackSize() const { return LocalStackSize; }
+  void setLocalStackSize(uint64_t Size) { LocalStackSize = Size; }
+  uint64_t getLocalStackSize() const { return LocalStackSize; }
+
+  void setOutliningStyle(std::string Style) { OutliningStyle = Style; }
+  Optional<std::string> getOutliningStyle() const { return OutliningStyle; }
 
   void setCalleeSavedStackSize(unsigned Size) {
     CalleeSavedStackSize = Size;
@@ -332,6 +345,25 @@ private:
 
   DenseMap<int, std::pair<unsigned, MCSymbol *>> JumpTableEntryInfo;
 };
+
+namespace yaml {
+struct AArch64FunctionInfo final : public yaml::MachineFunctionInfo {
+  Optional<bool> HasRedZone;
+
+  AArch64FunctionInfo() = default;
+  AArch64FunctionInfo(const llvm::AArch64FunctionInfo &MFI);
+
+  void mappingImpl(yaml::IO &YamlIO) override;
+  ~AArch64FunctionInfo() = default;
+};
+
+template <> struct MappingTraits<AArch64FunctionInfo> {
+  static void mapping(IO &YamlIO, AArch64FunctionInfo &MFI) {
+    YamlIO.mapOptional("hasRedZone", MFI.HasRedZone);
+  }
+};
+
+} // end namespace yaml
 
 } // end namespace llvm
 

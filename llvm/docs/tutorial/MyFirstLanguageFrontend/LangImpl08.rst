@@ -1,5 +1,3 @@
-:orphan:
-
 ========================================
  Kaleidoscope: Compiling to Object Code
 ========================================
@@ -25,7 +23,7 @@ machine.
 To specify the architecture that you want to target, we use a string
 called a "target triple". This takes the form
 ``<arch><sub>-<vendor>-<sys>-<abi>`` (see the `cross compilation docs
-<http://clang.llvm.org/docs/CrossCompilation.html#target-triple>`_).
+<https://clang.llvm.org/docs/CrossCompilation.html#target-triple>`_).
 
 As an example, we can see what clang thinks is our current target
 triple:

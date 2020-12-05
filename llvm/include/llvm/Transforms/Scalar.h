@@ -22,10 +22,6 @@ class Function;
 class FunctionPass;
 class ModulePass;
 class Pass;
-class GetElementPtrInst;
-class PassInfo;
-class TargetLowering;
-class TargetMachine;
 
 //===----------------------------------------------------------------------===//
 //
@@ -52,6 +48,13 @@ FunctionPass *createSCCPPass();
 // without modifying the CFG of the function.  It is a FunctionPass.
 //
 Pass *createDeadInstEliminationPass();
+
+//===----------------------------------------------------------------------===//
+//
+// RedundantDbgInstElimination - This pass removes redundant dbg intrinsics
+// without modifying the CFG of the function.  It is a FunctionPass.
+//
+Pass *createRedundantDbgInstEliminationPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -358,6 +361,12 @@ Pass *createLowerAtomicPass();
 // LowerGuardIntrinsic - Lower guard intrinsics to normal control flow.
 //
 Pass *createLowerGuardIntrinsicPass();
+
+//===----------------------------------------------------------------------===//
+//
+// LowerMatrixIntrinsics - Lower matrix intrinsics to vector operations.
+//
+Pass *createLowerMatrixIntrinsicsPass();
 
 //===----------------------------------------------------------------------===//
 //

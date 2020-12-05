@@ -36,7 +36,7 @@
 #define _LIBCPP_USE_COPYFILE
 #endif
 
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && _POSIX_TIMERS > 0
 #define _LIBCPP_USE_CLOCK_GETTIME
 #endif
 
@@ -44,7 +44,7 @@
 #include <sys/time.h> // for gettimeofday and timeval
 #endif                // !defined(CLOCK_REALTIME)
 
-#if defined(__unix__) && defined(__ELF__) && defined(_LIBCPP_HAS_COMMENT_LIB_PRAGMA)
+#if defined(__ELF__) && defined(_LIBCPP_LINK_RT_LIB)
 #pragma comment(lib, "rt")
 #endif
 

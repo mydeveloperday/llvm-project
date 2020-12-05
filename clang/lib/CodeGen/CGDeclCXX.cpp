@@ -10,12 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenFunction.h"
 #include "CGCXXABI.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenMPRuntime.h"
+#include "CodeGenFunction.h"
 #include "TargetInfo.h"
-#include "clang/Basic/CodeGenOptions.h"
+#include "clang/AST/Attr.h"
+#include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
@@ -54,10 +55,11 @@ static void EmitDeclInit(CodeGenFunction &CGF, const VarDecl &D,
     CGF.EmitComplexExprIntoLValue(Init, lv, /*isInit*/ true);
     return;
   case TEK_Aggregate:
-    CGF.EmitAggExpr(Init, AggValueSlot::forLValue(lv,AggValueSlot::IsDestructed,
-                                          AggValueSlot::DoesNotNeedGCBarriers,
-                                                  AggValueSlot::IsNotAliased,
-                                                  AggValueSlot::DoesNotOverlap));
+    CGF.EmitAggExpr(Init,
+                    AggValueSlot::forLValue(lv, CGF, AggValueSlot::IsDestructed,
+                                            AggValueSlot::DoesNotNeedGCBarriers,
+                                            AggValueSlot::IsNotAliased,
+                                            AggValueSlot::DoesNotOverlap));
     return;
   }
   llvm_unreachable("bad evaluation kind");
@@ -390,20 +392,20 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrDestructFunction(
       !isInSanitizerBlacklist(SanitizerKind::ShadowCallStack, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::ShadowCallStack);
 
-  auto RASignKind = getCodeGenOpts().getSignReturnAddress();
-  if (RASignKind != CodeGenOptions::SignReturnAddressScope::None) {
+  auto RASignKind = getLangOpts().getSignReturnAddressScope();
+  if (RASignKind != LangOptions::SignReturnAddressScopeKind::None) {
     Fn->addFnAttr("sign-return-address",
-                  RASignKind == CodeGenOptions::SignReturnAddressScope::All
+                  RASignKind == LangOptions::SignReturnAddressScopeKind::All
                       ? "all"
                       : "non-leaf");
-    auto RASignKey = getCodeGenOpts().getSignReturnAddressKey();
+    auto RASignKey = getLangOpts().getSignReturnAddressKey();
     Fn->addFnAttr("sign-return-address-key",
-                  RASignKey == CodeGenOptions::SignReturnAddressKeyValue::AKey
+                  RASignKey == LangOptions::SignReturnAddressKeyKind::AKey
                       ? "a_key"
                       : "b_key");
   }
 
-  if (getCodeGenOpts().BranchTargetEnforcement)
+  if (getLangOpts().BranchTargetEnforcement)
     Fn->addFnAttr("branch-target-enforcement");
 
   return Fn;

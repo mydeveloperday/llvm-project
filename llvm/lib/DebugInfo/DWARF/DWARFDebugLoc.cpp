@@ -57,6 +57,17 @@ DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
       return createResolverError(E.Value0, E.Kind);
     return None;
   }
+  case dwarf::DW_LLE_startx_endx: {
+    Optional<SectionedAddress> LowPC = LookupAddr(E.Value0);
+    if (!LowPC)
+      return createResolverError(E.Value0, E.Kind);
+    Optional<SectionedAddress> HighPC = LookupAddr(E.Value1);
+    if (!HighPC)
+      return createResolverError(E.Value1, E.Kind);
+    return DWARFLocationExpression{
+        DWARFAddressRange{LowPC->Address, HighPC->Address, LowPC->SectionIndex},
+        E.Loc};
+  }
   case dwarf::DW_LLE_startx_length: {
     Optional<SectionedAddress> LowPC = LookupAddr(E.Value0);
     if (!LowPC)
@@ -66,45 +77,51 @@ DWARFLocationInterpreter::Interpret(const DWARFLocationEntry &E) {
                                                      LowPC->SectionIndex},
                                    E.Loc};
   }
-  case dwarf::DW_LLE_offset_pair:
+  case dwarf::DW_LLE_offset_pair: {
     if (!Base) {
-      return createStringError(
-          inconvertibleErrorCode(),
-          "Unable to resolve DW_LLE_offset_pair: base address unknown");
+      return createStringError(inconvertibleErrorCode(),
+                               "Unable to resolve location list offset pair: "
+                               "Base address not defined");
     }
-    return DWARFLocationExpression{DWARFAddressRange{Base->Address + E.Value0,
-                                                     Base->Address + E.Value1,
-                                                     Base->SectionIndex},
-                                   E.Loc};
+    DWARFAddressRange Range{Base->Address + E.Value0, Base->Address + E.Value1,
+                            Base->SectionIndex};
+    if (Range.SectionIndex == SectionedAddress::UndefSection)
+      Range.SectionIndex = E.SectionIndex;
+    return DWARFLocationExpression{Range, E.Loc};
+  }
+  case dwarf::DW_LLE_default_location:
+    return DWARFLocationExpression{None, E.Loc};
   case dwarf::DW_LLE_base_address:
-    Base = SectionedAddress{E.Value0, SectionedAddress::UndefSection};
+    Base = SectionedAddress{E.Value0, E.SectionIndex};
     return None;
+  case dwarf::DW_LLE_start_end:
+    return DWARFLocationExpression{
+        DWARFAddressRange{E.Value0, E.Value1, E.SectionIndex}, E.Loc};
   case dwarf::DW_LLE_start_length:
     return DWARFLocationExpression{
-        DWARFAddressRange{E.Value0, E.Value0 + E.Value1,
-                          SectionedAddress::UndefSection},
+        DWARFAddressRange{E.Value0, E.Value0 + E.Value1, E.SectionIndex},
         E.Loc};
   default:
     llvm_unreachable("unreachable locations list kind");
   }
 }
 
-// When directly dumping the .debug_loc without a compile unit, we have to guess
-// at the DWARF version. This only affects DW_OP_call_ref, which is a rare
-// expression that LLVM doesn't produce. Guessing the wrong version means we
-// won't be able to pretty print expressions in DWARF2 binaries produced by
-// non-LLVM tools.
 static void dumpExpression(raw_ostream &OS, ArrayRef<uint8_t> Data,
                            bool IsLittleEndian, unsigned AddressSize,
                            const MCRegisterInfo *MRI, DWARFUnit *U) {
-  DWARFDataExtractor Extractor(toStringRef(Data), IsLittleEndian, AddressSize);
-  DWARFExpression(Extractor, dwarf::DWARF_VERSION, AddressSize).print(OS, MRI, U);
+  DWARFDataExtractor Extractor(Data, IsLittleEndian, AddressSize);
+  // Note. We do not pass any format to DWARFExpression, even if the
+  // corresponding unit is known. For now, there is only one operation,
+  // DW_OP_call_ref, which depends on the format; it is rarely used, and
+  // is unexpected in location tables.
+  DWARFExpression(Extractor, AddressSize).print(OS, MRI, U);
 }
 
 bool DWARFLocationTable::dumpLocationList(uint64_t *Offset, raw_ostream &OS,
                                           Optional<SectionedAddress> BaseAddr,
                                           const MCRegisterInfo *MRI,
-                                          DWARFUnit *U, DIDumpOptions DumpOpts,
+                                          const DWARFObject &Obj, DWARFUnit *U,
+                                          DIDumpOptions DumpOpts,
                                           unsigned Indent) const {
   DWARFLocationInterpreter Interp(
       BaseAddr, [U](uint32_t Index) -> Optional<SectionedAddress> {
@@ -115,14 +132,20 @@ bool DWARFLocationTable::dumpLocationList(uint64_t *Offset, raw_ostream &OS,
   OS << format("0x%8.8" PRIx64 ": ", *Offset);
   Error E = visitLocationList(Offset, [&](const DWARFLocationEntry &E) {
     Expected<Optional<DWARFLocationExpression>> Loc = Interp.Interpret(E);
-    if (!Loc || DumpOpts.Verbose)
-      dumpRawEntry(E, OS, Indent);
+    if (!Loc || DumpOpts.DisplayRawContents)
+      dumpRawEntry(E, OS, Indent, DumpOpts, Obj);
     if (Loc && *Loc) {
       OS << "\n";
       OS.indent(Indent);
-      if (DumpOpts.Verbose)
+      if (DumpOpts.DisplayRawContents)
         OS << "          => ";
-      Loc.get()->Range->dump(OS, Data.getAddressSize(), DumpOpts);
+
+      DIDumpOptions RangeDumpOpts(DumpOpts);
+      RangeDumpOpts.DisplayRawContents = false;
+      if (Loc.get()->Range)
+        Loc.get()->Range->dump(OS, Data.getAddressSize(), RangeDumpOpts, &Obj);
+      else
+        OS << "<default>";
     }
     if (!Loc)
       consumeError(Loc.takeError());
@@ -137,30 +160,34 @@ bool DWARFLocationTable::dumpLocationList(uint64_t *Offset, raw_ostream &OS,
     return true;
   });
   if (E) {
-    OS << "\n";
-    OS.indent(Indent);
-    OS << "error: " << toString(std::move(E));
+    DumpOpts.RecoverableErrorHandler(std::move(E));
     return false;
   }
   return true;
 }
 
-DWARFDebugLoc::LocationList const *
-DWARFDebugLoc::getLocationListAtOffset(uint64_t Offset) const {
-  auto It = partition_point(
-      Locations, [=](const LocationList &L) { return L.Offset < Offset; });
-  if (It != Locations.end() && It->Offset == Offset)
-    return &(*It);
-  return nullptr;
+Error DWARFLocationTable::visitAbsoluteLocationList(
+    uint64_t Offset, Optional<SectionedAddress> BaseAddr,
+    std::function<Optional<SectionedAddress>(uint32_t)> LookupAddr,
+    function_ref<bool(Expected<DWARFLocationExpression>)> Callback) const {
+  DWARFLocationInterpreter Interp(BaseAddr, std::move(LookupAddr));
+  return visitLocationList(&Offset, [&](const DWARFLocationEntry &E) {
+    Expected<Optional<DWARFLocationExpression>> Loc = Interp.Interpret(E);
+    if (!Loc)
+      return Callback(Loc.takeError());
+    if (*Loc)
+      return Callback(**Loc);
+    return true;
+  });
 }
 
 void DWARFDebugLoc::dump(raw_ostream &OS, const MCRegisterInfo *MRI,
-                         DIDumpOptions DumpOpts,
+                         const DWARFObject &Obj, DIDumpOptions DumpOpts,
                          Optional<uint64_t> DumpOffset) const {
   auto BaseAddr = None;
   unsigned Indent = 12;
   if (DumpOffset) {
-    dumpLocationList(&*DumpOffset, OS, BaseAddr, MRI, nullptr, DumpOpts,
+    dumpLocationList(&*DumpOffset, OS, BaseAddr, MRI, Obj, nullptr, DumpOpts,
                      Indent);
   } else {
     uint64_t Offset = 0;
@@ -170,7 +197,7 @@ void DWARFDebugLoc::dump(raw_ostream &OS, const MCRegisterInfo *MRI,
       OS << Separator;
       Separator = "\n";
 
-      CanContinue = dumpLocationList(&Offset, OS, BaseAddr, MRI, nullptr,
+      CanContinue = dumpLocationList(&Offset, OS, BaseAddr, MRI, Obj, nullptr,
                                      DumpOpts, Indent);
       OS << '\n';
     }
@@ -182,8 +209,9 @@ Error DWARFDebugLoc::visitLocationList(
     function_ref<bool(const DWARFLocationEntry &)> Callback) const {
   DataExtractor::Cursor C(*Offset);
   while (true) {
+    uint64_t SectionIndex;
     uint64_t Value0 = Data.getRelocatedAddress(C);
-    uint64_t Value1 = Data.getRelocatedAddress(C);
+    uint64_t Value1 = Data.getRelocatedAddress(C, &SectionIndex);
 
     DWARFLocationEntry E;
 
@@ -196,10 +224,12 @@ Error DWARFDebugLoc::visitLocationList(
     } else if (Value0 == (Data.getAddressSize() == 4 ? -1U : -1ULL)) {
       E.Kind = dwarf::DW_LLE_base_address;
       E.Value0 = Value1;
+      E.SectionIndex = SectionIndex;
     } else {
       E.Kind = dwarf::DW_LLE_offset_pair;
       E.Value0 = Value0;
       E.Value1 = Value1;
+      E.SectionIndex = SectionIndex;
       unsigned Bytes = Data.getU16(C);
       // A single location description describing the location of the object...
       Data.getU8(C, E.Loc, Bytes);
@@ -214,34 +244,10 @@ Error DWARFDebugLoc::visitLocationList(
   return Error::success();
 }
 
-Expected<DWARFDebugLoc::LocationList>
-DWARFDebugLoc::parseOneLocationList(uint64_t *Offset) {
-  LocationList LL;
-  LL.Offset = *Offset;
-
-  Error E = visitLocationList(Offset, [&](const DWARFLocationEntry &E) {
-    LL.Entries.push_back(E);
-    return true;
-  });
-  if (E)
-    return std::move(E);
-  return std::move(LL);
-}
-
-void DWARFDebugLoc::parse() {
-  uint64_t Offset = 0;
-  while (Offset < Data.getData().size()) {
-    if (auto LL = parseOneLocationList(&Offset))
-      Locations.push_back(std::move(*LL));
-    else {
-      logAllUnhandledErrors(LL.takeError(), WithColor::error());
-      break;
-    }
-  }
-}
-
 void DWARFDebugLoc::dumpRawEntry(const DWARFLocationEntry &Entry,
-                                 raw_ostream &OS, unsigned Indent) const {
+                                 raw_ostream &OS, unsigned Indent,
+                                 DIDumpOptions DumpOpts,
+                                 const DWARFObject &Obj) const {
   uint64_t Value0, Value1;
   switch (Entry.Kind) {
   case dwarf::DW_LLE_base_address:
@@ -262,6 +268,7 @@ void DWARFDebugLoc::dumpRawEntry(const DWARFLocationEntry &Entry,
   OS.indent(Indent);
   OS << '(' << format_hex(Value0, 2 + Data.getAddressSize() * 2) << ", "
      << format_hex(Value1, 2 + Data.getAddressSize() * 2) << ')';
+  DWARFFormValue::dumpAddressSection(Obj, OS, DumpOpts, Entry.SectionIndex);
 }
 
 Error DWARFDebugLoclists::visitLocationList(
@@ -278,6 +285,10 @@ Error DWARFDebugLoclists::visitLocationList(
     case dwarf::DW_LLE_base_addressx:
       E.Value0 = Data.getULEB128(C);
       break;
+    case dwarf::DW_LLE_startx_endx:
+      E.Value0 = Data.getULEB128(C);
+      E.Value1 = Data.getULEB128(C);
+      break;
     case dwarf::DW_LLE_startx_length:
       E.Value0 = Data.getULEB128(C);
       // Pre-DWARF 5 has different interpretation of the length field. We have
@@ -290,17 +301,21 @@ Error DWARFDebugLoclists::visitLocationList(
     case dwarf::DW_LLE_offset_pair:
       E.Value0 = Data.getULEB128(C);
       E.Value1 = Data.getULEB128(C);
+      E.SectionIndex = SectionedAddress::UndefSection;
+      break;
+    case dwarf::DW_LLE_default_location:
       break;
     case dwarf::DW_LLE_base_address:
-      E.Value0 = Data.getRelocatedAddress(C);
+      E.Value0 = Data.getRelocatedAddress(C, &E.SectionIndex);
+      break;
+    case dwarf::DW_LLE_start_end:
+      E.Value0 = Data.getRelocatedAddress(C, &E.SectionIndex);
+      E.Value1 = Data.getRelocatedAddress(C);
       break;
     case dwarf::DW_LLE_start_length:
-      E.Value0 = Data.getRelocatedAddress(C);
+      E.Value0 = Data.getRelocatedAddress(C, &E.SectionIndex);
       E.Value1 = Data.getULEB128(C);
       break;
-    case dwarf::DW_LLE_startx_endx:
-    case dwarf::DW_LLE_default_location:
-    case dwarf::DW_LLE_start_end:
     default:
       cantFail(C.takeError());
       return createStringError(errc::illegal_byte_sequence,
@@ -324,7 +339,9 @@ Error DWARFDebugLoclists::visitLocationList(
 }
 
 void DWARFDebugLoclists::dumpRawEntry(const DWARFLocationEntry &Entry,
-                                      raw_ostream &OS, unsigned Indent) const {
+                                      raw_ostream &OS, unsigned Indent,
+                                      DIDumpOptions DumpOpts,
+                                      const DWARFObject &Obj) const {
   size_t MaxEncodingStringLength = 0;
 #define HANDLE_DW_LLE(ID, NAME)                                                \
   MaxEncodingStringLength = std::max(MaxEncodingStringLength,                  \
@@ -339,9 +356,14 @@ void DWARFDebugLoclists::dumpRawEntry(const DWARFLocationEntry &Entry,
   OS << format("%-*s(", MaxEncodingStringLength, EncodingString.data());
   unsigned FieldSize = 2 + 2 * Data.getAddressSize();
   switch (Entry.Kind) {
+  case dwarf::DW_LLE_end_of_list:
+  case dwarf::DW_LLE_default_location:
+    break;
+  case dwarf::DW_LLE_startx_endx:
   case dwarf::DW_LLE_startx_length:
-  case dwarf::DW_LLE_start_length:
   case dwarf::DW_LLE_offset_pair:
+  case dwarf::DW_LLE_start_end:
+  case dwarf::DW_LLE_start_length:
     OS << format_hex(Entry.Value0, FieldSize) << ", "
        << format_hex(Entry.Value1, FieldSize);
     break;
@@ -349,14 +371,22 @@ void DWARFDebugLoclists::dumpRawEntry(const DWARFLocationEntry &Entry,
   case dwarf::DW_LLE_base_address:
     OS << format_hex(Entry.Value0, FieldSize);
     break;
-  case dwarf::DW_LLE_end_of_list:
-    break;
   }
   OS << ')';
+  switch (Entry.Kind) {
+  case dwarf::DW_LLE_base_address:
+  case dwarf::DW_LLE_start_end:
+  case dwarf::DW_LLE_start_length:
+    DWARFFormValue::dumpAddressSection(Obj, OS, DumpOpts, Entry.SectionIndex);
+    break;
+  default:
+    break;
+  }
 }
 
 void DWARFDebugLoclists::dumpRange(uint64_t StartOffset, uint64_t Size,
                                    raw_ostream &OS, const MCRegisterInfo *MRI,
+                                   const DWARFObject &Obj,
                                    DIDumpOptions DumpOpts) {
   if (!Data.isValidOffsetForDataOfSize(StartOffset, Size))  {
     OS << "Invalid dump range\n";
@@ -369,8 +399,8 @@ void DWARFDebugLoclists::dumpRange(uint64_t StartOffset, uint64_t Size,
     OS << Separator;
     Separator = "\n";
 
-    CanContinue = dumpLocationList(&Offset, OS, /*BaseAddr=*/None, MRI, nullptr,
-                                   DumpOpts, /*Indent=*/12);
+    CanContinue = dumpLocationList(&Offset, OS, /*BaseAddr=*/None, MRI, Obj,
+                                   nullptr, DumpOpts, /*Indent=*/12);
     OS << '\n';
   }
 }

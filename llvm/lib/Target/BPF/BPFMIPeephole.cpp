@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Debug.h"
+#include <set>
 
 using namespace llvm;
 
@@ -51,8 +52,13 @@ private:
   // Initialize class variables.
   void initialize(MachineFunction &MFParm);
 
+  bool isCopyFrom32Def(MachineInstr *CopyMI);
+  bool isInsnFrom32Def(MachineInstr *DefInsn);
+  bool isPhiFrom32Def(MachineInstr *MovMI);
   bool isMovFrom32Def(MachineInstr *MovMI);
   bool eliminateZExtSeq(void);
+
+  std::set<MachineInstr *> PhiInsns;
 
 public:
 
@@ -75,6 +81,75 @@ void BPFMIPeephole::initialize(MachineFunction &MFParm) {
   LLVM_DEBUG(dbgs() << "*** BPF MachineSSA ZEXT Elim peephole pass ***\n\n");
 }
 
+bool BPFMIPeephole::isCopyFrom32Def(MachineInstr *CopyMI)
+{
+  MachineOperand &opnd = CopyMI->getOperand(1);
+
+  if (!opnd.isReg())
+    return false;
+
+  // Return false if getting value from a 32bit physical register.
+  // Most likely, this physical register is aliased to
+  // function call return value or current function parameters.
+  Register Reg = opnd.getReg();
+  if (!Register::isVirtualRegister(Reg))
+    return false;
+
+  if (MRI->getRegClass(Reg) == &BPF::GPRRegClass)
+    return false;
+
+  MachineInstr *DefInsn = MRI->getVRegDef(Reg);
+  if (!isInsnFrom32Def(DefInsn))
+    return false;
+
+  return true;
+}
+
+bool BPFMIPeephole::isPhiFrom32Def(MachineInstr *PhiMI)
+{
+  for (unsigned i = 1, e = PhiMI->getNumOperands(); i < e; i += 2) {
+    MachineOperand &opnd = PhiMI->getOperand(i);
+
+    if (!opnd.isReg())
+      return false;
+
+    MachineInstr *PhiDef = MRI->getVRegDef(opnd.getReg());
+    if (!PhiDef)
+      return false;
+    if (PhiDef->isPHI()) {
+      if (PhiInsns.find(PhiDef) != PhiInsns.end())
+        return false;
+      PhiInsns.insert(PhiDef);
+      if (!isPhiFrom32Def(PhiDef))
+        return false;
+    }
+    if (PhiDef->getOpcode() == BPF::COPY && !isCopyFrom32Def(PhiDef))
+      return false;
+  }
+
+  return true;
+}
+
+// The \p DefInsn instruction defines a virtual register.
+bool BPFMIPeephole::isInsnFrom32Def(MachineInstr *DefInsn)
+{
+  if (!DefInsn)
+    return false;
+
+  if (DefInsn->isPHI()) {
+    if (PhiInsns.find(DefInsn) != PhiInsns.end())
+      return false;
+    PhiInsns.insert(DefInsn);
+    if (!isPhiFrom32Def(DefInsn))
+      return false;
+  } else if (DefInsn->getOpcode() == BPF::COPY) {
+    if (!isCopyFrom32Def(DefInsn))
+      return false;
+  }
+
+  return true;
+}
+
 bool BPFMIPeephole::isMovFrom32Def(MachineInstr *MovMI)
 {
   MachineInstr *DefInsn = MRI->getVRegDef(MovMI->getOperand(1).getReg());
@@ -82,34 +157,9 @@ bool BPFMIPeephole::isMovFrom32Def(MachineInstr *MovMI)
   LLVM_DEBUG(dbgs() << "  Def of Mov Src:");
   LLVM_DEBUG(DefInsn->dump());
 
-  if (!DefInsn)
+  PhiInsns.clear();
+  if (!isInsnFrom32Def(DefInsn))
     return false;
-
-  if (DefInsn->isPHI()) {
-    for (unsigned i = 1, e = DefInsn->getNumOperands(); i < e; i += 2) {
-      MachineOperand &opnd = DefInsn->getOperand(i);
-
-      if (!opnd.isReg())
-        return false;
-
-      MachineInstr *PhiDef = MRI->getVRegDef(opnd.getReg());
-      // quick check on PHI incoming definitions.
-      if (!PhiDef || PhiDef->isPHI() || PhiDef->getOpcode() == BPF::COPY)
-        return false;
-    }
-  }
-
-  if (DefInsn->getOpcode() == BPF::COPY) {
-    MachineOperand &opnd = DefInsn->getOperand(1);
-
-    if (!opnd.isReg())
-      return false;
-
-    Register Reg = opnd.getReg();
-    if ((Register::isVirtualRegister(Reg) &&
-         MRI->getRegClass(Reg) == &BPF::GPRRegClass))
-      return false;
-  }
 
   LLVM_DEBUG(dbgs() << "  One ZExt elim sequence identified.\n");
 
@@ -251,18 +301,15 @@ bool BPFMIPreEmitPeephole::eliminateRedundantMov(void) {
       //
       //   MOV rA, rA
       //
-      // This is particularly possible to happen when sub-register support
-      // enabled. The special type cast insn MOV_32_64 involves different
-      // register class on src (i32) and dst (i64), RA could generate useless
-      // instruction due to this.
+      // Note that we cannot remove
+      //   MOV_32_64  rA, wA
+      //   MOV_rr_32  wA, wA
+      // as these two instructions having side effects, zeroing out
+      // top 32 bits of rA.
       unsigned Opcode = MI.getOpcode();
-      if (Opcode == BPF::MOV_32_64 ||
-          Opcode == BPF::MOV_rr || Opcode == BPF::MOV_rr_32) {
+      if (Opcode == BPF::MOV_rr) {
         Register dst = MI.getOperand(0).getReg();
         Register src = MI.getOperand(1).getReg();
-
-        if (Opcode == BPF::MOV_32_64)
-          dst = TRI->getSubReg(dst, BPF::sub_32);
 
         if (dst != src)
           continue;

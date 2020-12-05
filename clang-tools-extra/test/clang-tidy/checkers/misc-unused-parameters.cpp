@@ -233,7 +233,7 @@ struct a {
 template <class>
 class d {
   a e;
-  void f() { e.b(); }
+  void f() { e.b(0); }
 };
 }  // namespace
 }  // namespace PR38055
@@ -276,3 +276,13 @@ public:
 // CHECK-FIXES: {{^}}  B(int  /*i*/) : A() {}{{$}}
 };
 } // namespace strict_mode_off
+
+namespace lambda {
+using fn = void(int);
+void f(fn *);
+void test() {
+  // CHECK-MESSAGES: :[[@LINE+2]]:12: warning: parameter 'I' is unused
+  // CHECK-FIXES: {{^}}  f([](int  /*I*/) {
+  f([](int I) { return; });
+}
+} // namespace lambda

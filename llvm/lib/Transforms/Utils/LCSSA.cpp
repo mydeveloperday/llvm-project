@@ -76,7 +76,7 @@ static bool isExitBlock(BasicBlock *BB,
 /// that are outside the current loop.  If so, insert LCSSA PHI nodes and
 /// rewrite the uses.
 bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
-                                    DominatorTree &DT, LoopInfo &LI,
+                                    const DominatorTree &DT, const LoopInfo &LI,
                                     ScalarEvolution *SE) {
   SmallVector<Use *, 16> UsesToRewrite;
   SmallSetVector<PHINode *, 16> PHIsToRemove;
@@ -128,7 +128,7 @@ bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
     if (auto *Inv = dyn_cast<InvokeInst>(I))
       DomBB = Inv->getNormalDest();
 
-    DomTreeNode *DomNode = DT.getNode(DomBB);
+    const DomTreeNode *DomNode = DT.getNode(DomBB);
 
     SmallVector<PHINode *, 16> AddedPHIs;
     SmallVector<PHINode *, 8> PostProcessPHIs;
@@ -200,9 +200,6 @@ bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
         UserBB = PN->getIncomingBlock(*UseToRewrite);
 
       if (isa<PHINode>(UserBB->begin()) && isExitBlock(UserBB, ExitBlocks)) {
-        // Tell the VHs that the uses changed. This updates SCEV's caches.
-        if (UseToRewrite->get()->hasValueHandle())
-          ValueHandleBase::ValueIsRAUWd(*UseToRewrite, &UserBB->front());
         UseToRewrite->set(&UserBB->front());
         continue;
       }
@@ -210,10 +207,6 @@ bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
       // If we added a single PHI, it must dominate all uses and we can directly
       // rename it.
       if (AddedPHIs.size() == 1) {
-        // Tell the VHs that the uses changed. This updates SCEV's caches.
-        // We might call ValueIsRAUWd multiple times for the same value.
-        if (UseToRewrite->get()->hasValueHandle())
-          ValueHandleBase::ValueIsRAUWd(*UseToRewrite, AddedPHIs[0]);
         UseToRewrite->set(AddedPHIs[0]);
         continue;
       }
@@ -281,7 +274,7 @@ bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
 
 // Compute the set of BasicBlocks in the loop `L` dominating at least one exit.
 static void computeBlocksDominatingExits(
-    Loop &L, DominatorTree &DT, SmallVector<BasicBlock *, 8> &ExitBlocks,
+    Loop &L, const DominatorTree &DT, SmallVector<BasicBlock *, 8> &ExitBlocks,
     SmallSetVector<BasicBlock *, 8> &BlocksDominatingExits) {
   SmallVector<BasicBlock *, 8> BBWorklist;
 
@@ -325,7 +318,7 @@ static void computeBlocksDominatingExits(
   }
 }
 
-bool llvm::formLCSSA(Loop &L, DominatorTree &DT, LoopInfo *LI,
+bool llvm::formLCSSA(Loop &L, const DominatorTree &DT, const LoopInfo *LI,
                      ScalarEvolution *SE) {
   bool Changed = false;
 
@@ -390,8 +383,8 @@ bool llvm::formLCSSA(Loop &L, DominatorTree &DT, LoopInfo *LI,
 }
 
 /// Process a loop nest depth first.
-bool llvm::formLCSSARecursively(Loop &L, DominatorTree &DT, LoopInfo *LI,
-                                ScalarEvolution *SE) {
+bool llvm::formLCSSARecursively(Loop &L, const DominatorTree &DT,
+                                const LoopInfo *LI, ScalarEvolution *SE) {
   bool Changed = false;
 
   // Recurse depth-first through inner loops.
@@ -403,7 +396,7 @@ bool llvm::formLCSSARecursively(Loop &L, DominatorTree &DT, LoopInfo *LI,
 }
 
 /// Process all loops in the function, inner-most out.
-static bool formLCSSAOnAllLoops(LoopInfo *LI, DominatorTree &DT,
+static bool formLCSSAOnAllLoops(const LoopInfo *LI, const DominatorTree &DT,
                                 ScalarEvolution *SE) {
   bool Changed = false;
   for (auto &L : *LI)

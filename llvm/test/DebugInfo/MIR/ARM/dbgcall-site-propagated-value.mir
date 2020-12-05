@@ -1,4 +1,4 @@
-# RUN: llc -debug-entry-values -run-pass=livedebugvalues -o - %s | FileCheck %s
+# RUN: llc -run-pass=livedebugvalues -o - %s | FileCheck %s
 
 # Based on the following C reproducer:
 #
@@ -85,8 +85,8 @@
   !30 = !DISubroutineType(types: !31)
   !31 = !{null, !7, !7}
   !32 = !{!33, !34}
-  !33 = !DILocalVariable(name: "p1", arg: 1, scope: !29, file: !1, line: 5, type: !7, flags: DIFlagArgumentNotModified)
-  !34 = !DILocalVariable(name: "p2", arg: 2, scope: !29, file: !1, line: 5, type: !7, flags: DIFlagArgumentNotModified)
+  !33 = !DILocalVariable(name: "p1", arg: 1, scope: !29, file: !1, line: 5, type: !7)
+  !34 = !DILocalVariable(name: "p2", arg: 2, scope: !29, file: !1, line: 5, type: !7)
   !35 = !DILocation(line: 0, scope: !29)
   !36 = !DILocation(line: 6, scope: !37)
   !37 = distinct !DILexicalBlock(scope: !29, file: !1, line: 6)
@@ -106,10 +106,6 @@
 name:            caller
 alignment:       4
 tracksRegLiveness: true
-callSites:
-  - { bb: 0, offset: 6 }
-  - { bb: 0, offset: 9, fwdArgRegs:
-      - { arg: 0, reg: '$r0' } }
 body:             |
   bb.0:
     liveins: $lr
@@ -129,6 +125,19 @@ body:             |
 ---
 name:            callee
 tracksRegLiveness: true
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: -4, size: 4, alignment: 4,
+      stack-id: default, callee-saved-register: '$lr', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+  - { id: 1, name: '', type: spill-slot, offset: -8, size: 4, alignment: 4,
+      stack-id: default, callee-saved-register: '$r11', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+  - { id: 2, name: '', type: spill-slot, offset: -12, size: 4, alignment: 4,
+      stack-id: default, callee-saved-register: '$r10', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+  - { id: 3, name: '', type: spill-slot, offset: -16, size: 4, alignment: 4,
+      stack-id: default, callee-saved-register: '$r4', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
 body:             |
   bb.0:
     successors: %bb.2(0x30000000), %bb.1(0x50000000)

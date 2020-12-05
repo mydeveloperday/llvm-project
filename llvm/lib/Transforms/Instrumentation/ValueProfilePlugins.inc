@@ -23,12 +23,14 @@ using CandidateInfo = ValueProfileCollector::CandidateInfo;
 ///--------------------------- MemIntrinsicPlugin ------------------------------
 class MemIntrinsicPlugin : public InstVisitor<MemIntrinsicPlugin> {
   Function &F;
+  TargetLibraryInfo &TLI;
   std::vector<CandidateInfo> *Candidates;
 
 public:
   static constexpr InstrProfValueKind Kind = IPVK_MemOPSize;
 
-  MemIntrinsicPlugin(Function &Fn) : F(Fn), Candidates(nullptr) {}
+  MemIntrinsicPlugin(Function &Fn, TargetLibraryInfo &TLI)
+      : F(Fn), TLI(TLI), Candidates(nullptr) {}
 
   void run(std::vector<CandidateInfo> &Cs) {
     Candidates = &Cs;
@@ -45,6 +47,22 @@ public:
     Instruction *AnnotatedInst = &MI;
     Candidates->emplace_back(CandidateInfo{Length, InsertPt, AnnotatedInst});
   }
+  void visitCallInst(CallInst &CI) {
+    auto *F = CI.getCalledFunction();
+    if (!F)
+      return;
+    LibFunc Func;
+    if (TLI.getLibFunc(CI, Func) &&
+        (Func == LibFunc_memcmp || Func == LibFunc_bcmp)) {
+      Value *Length = CI.getArgOperand(2);
+      // Not instrument constant length calls.
+      if (dyn_cast<ConstantInt>(Length))
+        return;
+      Instruction *InsertPt = &CI;
+      Instruction *AnnotatedInst = &CI;
+      Candidates->emplace_back(CandidateInfo{Length, InsertPt, AnnotatedInst});
+    }
+  }
 };
 
 ///------------------------ IndirectCallPromotionPlugin ------------------------
@@ -54,12 +72,12 @@ class IndirectCallPromotionPlugin {
 public:
   static constexpr InstrProfValueKind Kind = IPVK_IndirectCallTarget;
 
-  IndirectCallPromotionPlugin(Function &Fn) : F(Fn) {}
+  IndirectCallPromotionPlugin(Function &Fn, TargetLibraryInfo &TLI) : F(Fn) {}
 
   void run(std::vector<CandidateInfo> &Candidates) {
-    std::vector<Instruction *> Result = findIndirectCalls(F);
+    std::vector<CallBase *> Result = findIndirectCalls(F);
     for (Instruction *I : Result) {
-      Value *Callee = CallSite(I).getCalledValue();
+      Value *Callee = cast<CallBase>(I)->getCalledOperand();
       Instruction *InsertPt = I;
       Instruction *AnnotatedInst = I;
       Candidates.emplace_back(CandidateInfo{Callee, InsertPt, AnnotatedInst});
