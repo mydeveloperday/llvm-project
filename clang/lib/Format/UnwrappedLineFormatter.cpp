@@ -1245,8 +1245,7 @@ void UnwrappedLineFormatter::formatFirstToken(
   Whitespaces->replaceWhitespace(RootToken, Newlines, Indent, Indent,
                                  /*IsAligned=*/false,
                                  Line.InPPDirective &&
-                                     !RootToken.HasUnescapedNewline,
-                                 OnlyUntilLastNewline);
+                                     !RootToken.HasUnescapedNewline);
 }
 
 unsigned
