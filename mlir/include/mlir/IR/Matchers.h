@@ -15,8 +15,8 @@
 #ifndef MLIR_MATCHERS_H
 #define MLIR_MATCHERS_H
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
-#include "mlir/IR/StandardTypes.h"
 
 namespace mlir {
 
@@ -97,9 +97,9 @@ struct constant_int_op_binder {
       return false;
     auto type = op->getResult(0).getType();
 
-    if (type.isa<IntegerType>() || type.isa<IndexType>())
+    if (type.isa<IntegerType, IndexType>())
       return attr_value_binder<IntegerAttr>(bind_value).match(attr);
-    if (type.isa<VectorType>() || type.isa<RankedTensorType>()) {
+    if (type.isa<VectorType, RankedTensorType>()) {
       if (auto splatAttr = attr.dyn_cast<SplatElementsAttr>()) {
         return attr_value_binder<IntegerAttr>(bind_value)
             .match(splatAttr.getSplatValue());

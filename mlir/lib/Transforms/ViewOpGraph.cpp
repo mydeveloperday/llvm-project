@@ -9,8 +9,8 @@
 #include "mlir/Transforms/ViewOpGraph.h"
 #include "PassDetail.h"
 #include "mlir/IR/Block.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/StandardTypes.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace mlir;
@@ -130,7 +130,7 @@ struct PrintOpPass : public PrintOpBase<PrintOpPass> {
       for (Region &region : op.getRegions()) {
         for (auto indexed_block : llvm::enumerate(region)) {
           // Suffix block number if there are more than 1 block.
-          auto blockName = region.getBlocks().size() == 1
+          auto blockName = llvm::hasSingleElement(region)
                                ? ""
                                : ("__" + llvm::utostr(indexed_block.index()));
           llvm::WriteGraph(os, &indexed_block.value(), short_names,

@@ -42,18 +42,43 @@ enum NodeType : unsigned {
   DIVW,
   DIVUW,
   REMUW,
-  // FPR32<->GPR transfer operations for RV64. Needed as an i32<->f32 bitcast
-  // is not legal on RV64. FMV_W_X_RV64 matches the semantics of the FMV.W.X.
+  // RV64IB rotates, directly matching the semantics of the named RISC-V
+  // instructions.
+  ROLW,
+  RORW,
+  // RV64IB funnel shifts, with the semantics of the named RISC-V instructions,
+  // but the same operand order as fshl/fshr intrinsics.
+  FSRW,
+  FSLW,
+  // FPR<->GPR transfer operations when the FPR is smaller than XLEN, needed as
+  // XLEN is the only legal integer width.
+  //
+  // FMV_H_X matches the semantics of the FMV.H.X.
+  // FMV_X_ANYEXTH is similar to FMV.X.H but has an any-extended result.
+  // FMV_W_X_RV64 matches the semantics of the FMV.W.X.
   // FMV_X_ANYEXTW_RV64 is similar to FMV.X.W but has an any-extended result.
+  //
   // This is a more convenient semantic for producing dagcombines that remove
   // unnecessary GPR->FPR->GPR moves.
+  FMV_H_X,
+  FMV_X_ANYEXTH,
   FMV_W_X_RV64,
   FMV_X_ANYEXTW_RV64,
   // READ_CYCLE_WIDE - A read of the 64-bit cycle CSR on a 32-bit target
   // (returns (Lo, Hi)). It takes a chain operand.
-  READ_CYCLE_WIDE
+  READ_CYCLE_WIDE,
+  // Generalized Reverse and Generalized Or-Combine - directly matching the
+  // semantics of the named RISC-V instructions. Lowered as custom nodes as
+  // TableGen chokes when faced with commutative permutations in deeply-nested
+  // DAGs. Each node takes an input operand and a TargetConstant immediate
+  // shift amount, and outputs a bit-manipulated version of input. All operands
+  // are of type XLenVT.
+  GREVI,
+  GREVIW,
+  GORCI,
+  GORCIW,
 };
-}
+} // namespace RISCVISD
 
 class RISCVTargetLowering : public TargetLowering {
   const RISCVSubtarget &Subtarget;
@@ -74,6 +99,8 @@ public:
   bool isTruncateFree(EVT SrcVT, EVT DstVT) const override;
   bool isZExtFree(SDValue Val, EVT VT2) const override;
   bool isSExtCheaperThanZExt(EVT SrcVT, EVT DstVT) const override;
+  bool isCheapToSpeculateCttz() const override;
+  bool isCheapToSpeculateCtlz() const override;
   bool isFPImmLegal(const APFloat &Imm, EVT VT,
                     bool ForCodeSize) const override;
 
@@ -126,6 +153,9 @@ public:
   Instruction *emitTrailingFence(IRBuilder<> &Builder, Instruction *Inst,
                                  AtomicOrdering Ord) const override;
 
+  bool isFMAFasterThanFMulAndFAdd(const MachineFunction &MF,
+                                  EVT VT) const override;
+
   ISD::NodeType getExtendForAtomicOps() const override {
     return ISD::SIGN_EXTEND;
   }
@@ -161,13 +191,6 @@ public:
   Register getRegisterByName(const char *RegName, LLT VT,
                              const MachineFunction &MF) const override;
 
-private:
-  void analyzeInputArgs(MachineFunction &MF, CCState &CCInfo,
-                        const SmallVectorImpl<ISD::InputArg> &Ins,
-                        bool IsRet) const;
-  void analyzeOutputArgs(MachineFunction &MF, CCState &CCInfo,
-                         const SmallVectorImpl<ISD::OutputArg> &Outs,
-                         bool IsRet, CallLoweringInfo *CLI) const;
   // Lower incoming arguments, copy physregs into vregs
   SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,
                                bool IsVarArg,
@@ -184,11 +207,38 @@ private:
                       SelectionDAG &DAG) const override;
   SDValue LowerCall(TargetLowering::CallLoweringInfo &CLI,
                     SmallVectorImpl<SDValue> &InVals) const override;
+
   bool shouldConvertConstantLoadToIntImm(const APInt &Imm,
                                          Type *Ty) const override {
     return true;
   }
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
+  bool shouldConsiderGEPOffsetSplit() const override { return true; }
+
+  bool decomposeMulByConstant(LLVMContext &Context, EVT VT,
+                              SDValue C) const override;
+
+  TargetLowering::AtomicExpansionKind
+  shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
+  Value *emitMaskedAtomicRMWIntrinsic(IRBuilder<> &Builder, AtomicRMWInst *AI,
+                                      Value *AlignedAddr, Value *Incr,
+                                      Value *Mask, Value *ShiftAmt,
+                                      AtomicOrdering Ord) const override;
+  TargetLowering::AtomicExpansionKind
+  shouldExpandAtomicCmpXchgInIR(AtomicCmpXchgInst *CI) const override;
+  Value *emitMaskedAtomicCmpXchgIntrinsic(IRBuilder<> &Builder,
+                                          AtomicCmpXchgInst *CI,
+                                          Value *AlignedAddr, Value *CmpVal,
+                                          Value *NewVal, Value *Mask,
+                                          AtomicOrdering Ord) const override;
+
+private:
+  void analyzeInputArgs(MachineFunction &MF, CCState &CCInfo,
+                        const SmallVectorImpl<ISD::InputArg> &Ins,
+                        bool IsRet) const;
+  void analyzeOutputArgs(MachineFunction &MF, CCState &CCInfo,
+                         const SmallVectorImpl<ISD::OutputArg> &Outs,
+                         bool IsRet, CallLoweringInfo *CLI) const;
 
   template <class NodeTy>
   SDValue getAddr(NodeTy *N, SelectionDAG &DAG, bool IsLocal = true) const;
@@ -197,7 +247,6 @@ private:
                            bool UseGOT) const;
   SDValue getDynamicTLSAddr(GlobalAddressSDNode *N, SelectionDAG &DAG) const;
 
-  bool shouldConsiderGEPOffsetSplit() const override { return true; }
   SDValue lowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
@@ -213,19 +262,6 @@ private:
   bool isEligibleForTailCallOptimization(
       CCState &CCInfo, CallLoweringInfo &CLI, MachineFunction &MF,
       const SmallVector<CCValAssign, 16> &ArgLocs) const;
-
-  TargetLowering::AtomicExpansionKind
-  shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
-  virtual Value *emitMaskedAtomicRMWIntrinsic(
-      IRBuilder<> &Builder, AtomicRMWInst *AI, Value *AlignedAddr, Value *Incr,
-      Value *Mask, Value *ShiftAmt, AtomicOrdering Ord) const override;
-  TargetLowering::AtomicExpansionKind
-  shouldExpandAtomicCmpXchgInIR(AtomicCmpXchgInst *CI) const override;
-  virtual Value *
-  emitMaskedAtomicCmpXchgIntrinsic(IRBuilder<> &Builder, AtomicCmpXchgInst *CI,
-                                   Value *AlignedAddr, Value *CmpVal,
-                                   Value *NewVal, Value *Mask,
-                                   AtomicOrdering Ord) const override;
 
   /// Generate error diagnostics if any register used by CC has been marked
   /// reserved.

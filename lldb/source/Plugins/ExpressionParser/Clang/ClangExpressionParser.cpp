@@ -85,7 +85,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/LLDBAssert.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Reproducer.h"
+#include "lldb/Utility/ReproducerProvider.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StringList.h"
@@ -158,11 +158,12 @@ static void AddAllFixIts(ClangDiagnostic *diag, const clang::Diagnostic &Info) {
 class ClangDiagnosticManagerAdapter : public clang::DiagnosticConsumer {
 public:
   ClangDiagnosticManagerAdapter(DiagnosticOptions &opts) {
-    DiagnosticOptions *m_options = new DiagnosticOptions(opts);
-    m_options->ShowPresumedLoc = true;
-    m_options->ShowLevel = false;
-    m_os.reset(new llvm::raw_string_ostream(m_output));
-    m_passthrough.reset(new clang::TextDiagnosticPrinter(*m_os, m_options));
+    DiagnosticOptions *options = new DiagnosticOptions(opts);
+    options->ShowPresumedLoc = true;
+    options->ShowLevel = false;
+    m_os = std::make_shared<llvm::raw_string_ostream>(m_output);
+    m_passthrough =
+        std::make_shared<clang::TextDiagnosticPrinter>(*m_os, options);
   }
 
   void ResetManager(DiagnosticManager *manager = nullptr) {
@@ -198,6 +199,9 @@ public:
       }
       return;
     }
+
+    // Update error/warning counters.
+    DiagnosticConsumer::HandleDiagnostic(DiagLevel, Info);
 
     // Render diagnostic message to m_output.
     m_output.clear();
@@ -260,7 +264,11 @@ public:
     }
   }
 
-  clang::TextDiagnosticPrinter *GetPassthrough() { return m_passthrough.get(); }
+  void BeginSourceFile(const LangOptions &LO, const Preprocessor *PP) override {
+    m_passthrough->BeginSourceFile(LO, PP);
+  }
+
+  void EndSourceFile() override { m_passthrough->EndSourceFile(); }
 
 private:
   DiagnosticManager *m_manager = nullptr;
@@ -292,6 +300,41 @@ static void SetupModuleHeaderPaths(CompilerInstance *compiler,
   search_opts.ResourceDir = GetClangResourceDir().GetPath();
 
   search_opts.ImplicitModuleMaps = true;
+}
+
+/// Iff the given identifier is a C++ keyword, remove it from the
+/// identifier table (i.e., make the token a normal identifier).
+static void RemoveCppKeyword(IdentifierTable &idents, llvm::StringRef token) {
+  // FIXME: 'using' is used by LLDB for local variables, so we can't remove
+  // this keyword without breaking this functionality.
+  if (token == "using")
+    return;
+  // GCC's '__null' is used by LLDB to define NULL/Nil/nil.
+  if (token == "__null")
+    return;
+
+  LangOptions cpp_lang_opts;
+  cpp_lang_opts.CPlusPlus = true;
+  cpp_lang_opts.CPlusPlus11 = true;
+  cpp_lang_opts.CPlusPlus20 = true;
+
+  clang::IdentifierInfo &ii = idents.get(token);
+  // The identifier has to be a C++-exclusive keyword. if not, then there is
+  // nothing to do.
+  if (!ii.isCPlusPlusKeyword(cpp_lang_opts))
+    return;
+  // If the token is already an identifier, then there is nothing to do.
+  if (ii.getTokenID() == clang::tok::identifier)
+    return;
+  // Otherwise the token is a C++ keyword, so turn it back into a normal
+  // identifier.
+  ii.revertTokenIDToIdentifier();
+}
+
+/// Remove all C++ keywords from the given identifier table.
+static void RemoveAllCppKeywords(IdentifierTable &idents) {
+#define KEYWORD(NAME, FLAGS) RemoveCppKeyword(idents, llvm::StringRef(#NAME));
+#include "clang/Basic/TokenKinds.def"
 }
 
 //===----------------------------------------------------------------------===//
@@ -330,7 +373,7 @@ ClangExpressionParser::ClangExpressionParser(
   }
 
   // 1. Create a new compiler instance.
-  m_compiler.reset(new CompilerInstance());
+  m_compiler = std::make_unique<CompilerInstance>();
 
   // When capturing a reproducer, hook up the file collector with clang to
   // collector modules and headers.
@@ -446,6 +489,10 @@ ClangExpressionParser::ClangExpressionParser(
 
   // 4. Create and install the target on the compiler.
   m_compiler->createDiagnostics();
+  // Limit the number of error diagnostics we emit.
+  // A value of 0 means no limit for both LLDB and Clang.
+  m_compiler->getDiagnostics().setErrorLimit(target_sp->GetExprErrorLimit());
+
   auto target_info = TargetInfo::CreateTargetInfo(
       m_compiler->getDiagnostics(), m_compiler->getInvocation().TargetOpts);
   if (log) {
@@ -615,6 +662,21 @@ ClangExpressionParser::ClangExpressionParser(
     m_compiler->createSourceManager(m_compiler->getFileManager());
   m_compiler->createPreprocessor(TU_Complete);
 
+  switch (language) {
+  case lldb::eLanguageTypeC:
+  case lldb::eLanguageTypeC89:
+  case lldb::eLanguageTypeC99:
+  case lldb::eLanguageTypeC11:
+  case lldb::eLanguageTypeObjC:
+    // This is not a C++ expression but we enabled C++ as explained above.
+    // Remove all C++ keywords from the PP so that the user can still use
+    // variables that have C++ keywords as names (e.g. 'int template;').
+    RemoveAllCppKeywords(m_compiler->getPreprocessor().getIdentifierTable());
+    break;
+  default:
+    break;
+  }
+
   if (ClangModulesDeclVendor *decl_vendor =
           target_sp->GetClangModulesDeclVendor()) {
     if (auto *clang_persistent_vars = llvm::cast<ClangPersistentVariables>(
@@ -640,12 +702,12 @@ ClangExpressionParser::ClangExpressionParser(
   m_compiler->createASTContext();
   clang::ASTContext &ast_context = m_compiler->getASTContext();
 
-  m_ast_context.reset(new TypeSystemClang(
-      "Expression ASTContext for '" + m_filename + "'", ast_context));
+  m_ast_context = std::make_unique<TypeSystemClang>(
+      "Expression ASTContext for '" + m_filename + "'", ast_context);
 
   std::string module_name("$__lldb_module");
 
-  m_llvm_context.reset(new LLVMContext());
+  m_llvm_context = std::make_unique<LLVMContext>();
   m_code_generator.reset(CreateLLVMCodeGen(
       m_compiler->getDiagnostics(), module_name,
       m_compiler->getHeaderSearchOpts(), m_compiler->getPreprocessorOpts(),
@@ -966,7 +1028,6 @@ ClangExpressionParser::ParseInternal(DiagnosticManager &diagnostic_manager,
   ClangDiagnosticManagerAdapter *adapter =
       static_cast<ClangDiagnosticManagerAdapter *>(
           m_compiler->getDiagnostics().getClient());
-  auto diag_buf = adapter->GetPassthrough();
 
   adapter->ResetManager(&diagnostic_manager);
 
@@ -1021,8 +1082,8 @@ ClangExpressionParser::ParseInternal(DiagnosticManager &diagnostic_manager,
     source_mgr.setMainFileID(source_mgr.createFileID(std::move(memory_buffer)));
   }
 
-  diag_buf->BeginSourceFile(m_compiler->getLangOpts(),
-                            &m_compiler->getPreprocessor());
+  adapter->BeginSourceFile(m_compiler->getLangOpts(),
+                           &m_compiler->getPreprocessor());
 
   ClangExpressionHelper *type_system_helper =
       dyn_cast<ClangExpressionHelper>(m_expr.GetTypeSystemHelper());
@@ -1046,11 +1107,11 @@ ClangExpressionParser::ParseInternal(DiagnosticManager &diagnostic_manager,
 
   std::unique_ptr<clang::ASTConsumer> Consumer;
   if (ast_transformer) {
-    Consumer.reset(new ASTConsumerForwarder(ast_transformer));
+    Consumer = std::make_unique<ASTConsumerForwarder>(ast_transformer);
   } else if (m_code_generator) {
-    Consumer.reset(new ASTConsumerForwarder(m_code_generator.get()));
+    Consumer = std::make_unique<ASTConsumerForwarder>(m_code_generator.get());
   } else {
-    Consumer.reset(new ASTConsumer());
+    Consumer = std::make_unique<ASTConsumer>();
   }
 
   clang::ASTContext &ast_context = m_compiler->getASTContext();
@@ -1067,6 +1128,7 @@ ClangExpressionParser::ParseInternal(DiagnosticManager &diagnostic_manager,
   ClangExpressionDeclMap *decl_map = type_system_helper->DeclMap();
   if (decl_map) {
     decl_map->InstallCodeGenerator(&m_compiler->getASTConsumer());
+    decl_map->InstallDiagnosticManager(diagnostic_manager);
 
     clang::ExternalASTSource *ast_source = decl_map->CreateProxy();
 
@@ -1107,9 +1169,9 @@ ClangExpressionParser::ParseInternal(DiagnosticManager &diagnostic_manager,
   // original behavior of ParseAST (which also destroys the Sema after parsing).
   m_compiler->setSema(nullptr);
 
-  diag_buf->EndSourceFile();
+  adapter->EndSourceFile();
 
-  unsigned num_errors = diag_buf->getNumErrors();
+  unsigned num_errors = adapter->getNumErrors();
 
   if (m_pp_callbacks && m_pp_callbacks->hasErrors()) {
     num_errors++;
@@ -1323,18 +1385,13 @@ lldb_private::Status ClangExpressionParser::PrepareForExecution(
       type_system_helper->DeclMap(); // result can be NULL
 
   if (decl_map) {
-    Target *target = exe_ctx.GetTargetPtr();
-    auto &error_stream = target->GetDebugger().GetErrorStream();
+    StreamString error_stream;
     IRForTarget ir_for_target(decl_map, m_expr.NeedsVariableResolution(),
                               *execution_unit_sp, error_stream,
                               function_name.AsCString());
 
-    bool ir_can_run =
-        ir_for_target.runOnModule(*execution_unit_sp->GetModule());
-
-    if (!ir_can_run) {
-      err.SetErrorString(
-          "The expression could not be prepared to run in the target");
+    if (!ir_for_target.runOnModule(*execution_unit_sp->GetModule())) {
+      err.SetErrorString(error_stream.GetString());
       return err;
     }
 

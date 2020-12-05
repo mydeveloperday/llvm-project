@@ -24,24 +24,33 @@ namespace targets {
 // RISC-V Target
 class RISCVTargetInfo : public TargetInfo {
 protected:
-  std::string ABI;
+  std::string ABI, CPU;
   bool HasM;
   bool HasA;
   bool HasF;
   bool HasD;
   bool HasC;
   bool HasB;
+  bool HasV;
+  bool HasZfh;
 
 public:
   RISCVTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
-      : TargetInfo(Triple), HasM(false), HasA(false), HasF(false),
-        HasD(false), HasC(false), HasB(false) {
+      : TargetInfo(Triple), HasM(false), HasA(false), HasF(false), HasD(false),
+        HasC(false), HasB(false), HasV(false), HasZfh(false) {
     LongDoubleWidth = 128;
     LongDoubleAlign = 128;
     LongDoubleFormat = &llvm::APFloat::IEEEquad();
     SuitableAlign = 128;
     WCharType = SignedInt;
     WIntType = UnsignedInt;
+  }
+
+  bool setCPU(const std::string &Name) override {
+    if (!isValidCPUName(Name))
+      return false;
+    CPU = Name;
+    return true;
   }
 
   StringRef getABI() const override { return ABI; }
@@ -97,6 +106,11 @@ public:
     return false;
   }
 
+  bool isValidCPUName(StringRef Name) const override;
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
+  bool isValidTuneCPUName(StringRef Name) const override;
+  void fillValidTuneCPUList(SmallVectorImpl<StringRef> &Values) const override;
+
   void setMaxAtomicWidth() override {
     MaxAtomicPromoteWidth = 128;
 
@@ -120,6 +134,11 @@ public:
     }
     return false;
   }
+
+  bool isValidCPUName(StringRef Name) const override;
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
+  bool isValidTuneCPUName(StringRef Name) const override;
+  void fillValidTuneCPUList(SmallVectorImpl<StringRef> &Values) const override;
 
   void setMaxAtomicWidth() override {
     MaxAtomicPromoteWidth = 128;

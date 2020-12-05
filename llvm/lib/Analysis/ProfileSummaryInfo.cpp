@@ -19,6 +19,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/ProfileData/ProfileCommon.h"
 #include "llvm/Support/CommandLine.h"
 using namespace llvm;
 
@@ -70,18 +71,21 @@ static cl::opt<bool> PartialProfile(
     "partial-profile", cl::Hidden, cl::init(false),
     cl::desc("Specify the current profile is used as a partial profile."));
 
-// Find the summary entry for a desired percentile of counts.
-static const ProfileSummaryEntry &getEntryForPercentile(SummaryEntryVector &DS,
-                                                        uint64_t Percentile) {
-  auto It = partition_point(DS, [=](const ProfileSummaryEntry &Entry) {
-    return Entry.Cutoff < Percentile;
-  });
-  // The required percentile has to be <= one of the percentiles in the
-  // detailed summary.
-  if (It == DS.end())
-    report_fatal_error("Desired percentile exceeds the maximum cutoff");
-  return *It;
-}
+cl::opt<bool> ScalePartialSampleProfileWorkingSetSize(
+    "scale-partial-sample-profile-working-set-size", cl::Hidden, cl::init(true),
+    cl::desc(
+        "If true, scale the working set size of the partial sample profile "
+        "by the partial profile ratio to reflect the size of the program "
+        "being compiled."));
+
+static cl::opt<double> PartialSampleProfileWorkingSetSizeScaleFactor(
+    "partial-sample-profile-working-set-size-scale-factor", cl::Hidden,
+    cl::init(0.008),
+    cl::desc("The scale factor used to scale the working set size of the "
+             "partial sample profile along with the partial profile ratio. "
+             "This includes the factor of the profile counter per block "
+             "and the factor to scale the working set size to use the same "
+             "shared thresholds as PGO."));
 
 // The profile summary metadata may be attached either by the frontend or by
 // any backend passes (IR level instrumentation, for example). This method
@@ -268,22 +272,35 @@ bool ProfileSummaryInfo::isFunctionEntryCold(const Function *F) const {
 /// Compute the hot and cold thresholds.
 void ProfileSummaryInfo::computeThresholds() {
   auto &DetailedSummary = Summary->getDetailedSummary();
-  auto &HotEntry =
-      getEntryForPercentile(DetailedSummary, ProfileSummaryCutoffHot);
+  auto &HotEntry = ProfileSummaryBuilder::getEntryForPercentile(
+      DetailedSummary, ProfileSummaryCutoffHot);
   HotCountThreshold = HotEntry.MinCount;
   if (ProfileSummaryHotCount.getNumOccurrences() > 0)
     HotCountThreshold = ProfileSummaryHotCount;
-  auto &ColdEntry =
-      getEntryForPercentile(DetailedSummary, ProfileSummaryCutoffCold);
+  auto &ColdEntry = ProfileSummaryBuilder::getEntryForPercentile(
+      DetailedSummary, ProfileSummaryCutoffCold);
   ColdCountThreshold = ColdEntry.MinCount;
   if (ProfileSummaryColdCount.getNumOccurrences() > 0)
     ColdCountThreshold = ProfileSummaryColdCount;
   assert(ColdCountThreshold <= HotCountThreshold &&
          "Cold count threshold cannot exceed hot count threshold!");
-  HasHugeWorkingSetSize =
-      HotEntry.NumCounts > ProfileSummaryHugeWorkingSetSizeThreshold;
-  HasLargeWorkingSetSize =
-      HotEntry.NumCounts > ProfileSummaryLargeWorkingSetSizeThreshold;
+  if (!hasPartialSampleProfile() || !ScalePartialSampleProfileWorkingSetSize) {
+    HasHugeWorkingSetSize =
+        HotEntry.NumCounts > ProfileSummaryHugeWorkingSetSizeThreshold;
+    HasLargeWorkingSetSize =
+        HotEntry.NumCounts > ProfileSummaryLargeWorkingSetSizeThreshold;
+  } else {
+    // Scale the working set size of the partial sample profile to reflect the
+    // size of the program being compiled.
+    double PartialProfileRatio = Summary->getPartialProfileRatio();
+    uint64_t ScaledHotEntryNumCounts =
+        static_cast<uint64_t>(HotEntry.NumCounts * PartialProfileRatio *
+                              PartialSampleProfileWorkingSetSizeScaleFactor);
+    HasHugeWorkingSetSize =
+        ScaledHotEntryNumCounts > ProfileSummaryHugeWorkingSetSizeThreshold;
+    HasLargeWorkingSetSize =
+        ScaledHotEntryNumCounts > ProfileSummaryLargeWorkingSetSizeThreshold;
+  }
 }
 
 Optional<uint64_t>
@@ -295,8 +312,8 @@ ProfileSummaryInfo::computeThreshold(int PercentileCutoff) const {
     return iter->second;
   }
   auto &DetailedSummary = Summary->getDetailedSummary();
-  auto &Entry =
-      getEntryForPercentile(DetailedSummary, PercentileCutoff);
+  auto &Entry = ProfileSummaryBuilder::getEntryForPercentile(DetailedSummary,
+                                                             PercentileCutoff);
   uint64_t CountThreshold = Entry.MinCount;
   ThresholdCache[PercentileCutoff] = CountThreshold;
   return CountThreshold;

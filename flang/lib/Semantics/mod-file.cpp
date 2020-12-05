@@ -8,6 +8,7 @@
 
 #include "mod-file.h"
 #include "resolve-names.h"
+#include "flang/Common/restorer.h"
 #include "flang/Evaluate/tools.h"
 #include "flang/Parser/message.h"
 #include "flang/Parser/parsing.h"
@@ -42,7 +43,7 @@ struct ModHeader {
 };
 
 static std::optional<SourceName> GetSubmoduleParent(const parser::Program &);
-static SymbolVector CollectSymbols(const Scope &);
+static void CollectSymbols(const Scope &, SymbolVector &, SymbolVector &);
 static void PutEntity(llvm::raw_ostream &, const Symbol &);
 static void PutObjectEntity(llvm::raw_ostream &, const Symbol &);
 static void PutProcEntity(llvm::raw_ostream &, const Symbol &);
@@ -99,6 +100,9 @@ private:
 };
 
 bool ModFileWriter::WriteAll() {
+  // this flag affects character literals: force it to be consistent
+  auto restorer{
+      common::ScopedSet(parser::useHexadecimalEscapeSequences, false)};
   WriteAll(context_.globalScope());
   return !context_.AnyFatalError();
 }
@@ -173,16 +177,24 @@ std::string ModFileWriter::GetAsString(const Symbol &symbol) {
 }
 
 // Put out the visible symbols from scope.
-void ModFileWriter::PutSymbols(const Scope &scope) {
-  std::string buf;
-  llvm::raw_string_ostream typeBindings{
-      buf}; // stuff after CONTAINS in derived type
-  for (const Symbol &symbol : CollectSymbols(scope)) {
+bool ModFileWriter::PutSymbols(const Scope &scope) {
+  SymbolVector sorted;
+  SymbolVector uses;
+  CollectSymbols(scope, sorted, uses);
+  std::string buf; // stuff after CONTAINS in derived type
+  llvm::raw_string_ostream typeBindings{buf};
+  for (const Symbol &symbol : sorted) {
     PutSymbol(typeBindings, symbol);
+  }
+  for (const Symbol &symbol : uses) {
+    PutUse(symbol);
   }
   if (auto str{typeBindings.str()}; !str.empty()) {
     CHECK(scope.IsDerivedType());
     decls_ << "contains\n" << str;
+    return true;
+  } else {
+    return false;
   }
 }
 
@@ -253,9 +265,6 @@ void ModFileWriter::PutSymbol(
                      decls_ << "::/" << symbol.name() << "/\n";
                    }
                  },
-                 [&](const FinalProcDetails &) {
-                   typeBindings << "final::" << symbol.name() << '\n';
-                 },
                  [](const HostAssocDetails &) {},
                  [](const MiscDetails &) {},
                  [&](const auto &) { PutEntity(decls_, symbol); },
@@ -283,7 +292,17 @@ void ModFileWriter::PutDerivedType(const Symbol &typeSymbol) {
   if (details.sequence()) {
     decls_ << "sequence\n";
   }
-  PutSymbols(typeScope);
+  bool contains{PutSymbols(typeScope)};
+  if (!details.finals().empty()) {
+    const char *sep{contains ? "final::" : "contains\nfinal::"};
+    for (const auto &pair : details.finals()) {
+      decls_ << sep << pair.second->name();
+      sep = ",";
+    }
+    if (*sep == ',') {
+      decls_ << '\n';
+    }
+  }
   decls_ << "end type\n";
 }
 
@@ -322,7 +341,11 @@ void ModFileWriter::PutSubprogram(const Symbol &symbol) {
     if (n++ > 0) {
       os << ',';
     }
-    os << dummy->name();
+    if (dummy) {
+      os << dummy->name();
+    } else {
+      os << "*";
+    }
   }
   os << ')';
   PutAttrs(os, bindAttrs, details.bindName(), " "s, ""s);
@@ -375,10 +398,13 @@ static llvm::raw_ostream &PutGenericName(
 }
 
 void ModFileWriter::PutGeneric(const Symbol &symbol) {
+  const auto &genericOwner{symbol.owner()};
   auto &details{symbol.get<GenericDetails>()};
   PutGenericName(decls_ << "interface ", symbol) << '\n';
   for (const Symbol &specific : details.specificProcs()) {
-    decls_ << "procedure::" << specific.name() << '\n';
+    if (specific.owner() == genericOwner) {
+      decls_ << "procedure::" << specific.name() << '\n';
+    }
   }
   decls_ << "end interface\n";
   if (symbol.attrs().test(Attr::PRIVATE)) {
@@ -389,7 +415,7 @@ void ModFileWriter::PutGeneric(const Symbol &symbol) {
 void ModFileWriter::PutUse(const Symbol &symbol) {
   auto &details{symbol.get<UseDetails>()};
   auto &use{details.symbol()};
-  uses_ << "use " << details.module().name();
+  uses_ << "use " << GetUsedModule(details).name();
   PutGenericName(uses_ << ",only:", symbol);
   // Can have intrinsic op with different local-name and use-name
   // (e.g. `operator(<)` and `operator(.lt.)`) but rename is not allowed
@@ -413,8 +439,8 @@ void ModFileWriter::PutUseExtraAttr(
 
 // Collect the symbols of this scope sorted by their original order, not name.
 // Namelists are an exception: they are sorted after other symbols.
-SymbolVector CollectSymbols(const Scope &scope) {
-  SymbolVector sorted;
+void CollectSymbols(
+    const Scope &scope, SymbolVector &sorted, SymbolVector &uses) {
   SymbolVector namelist;
   std::size_t commonSize{scope.commonBlocks().size()};
   auto symbols{scope.GetSymbols()};
@@ -426,6 +452,9 @@ SymbolVector CollectSymbols(const Scope &scope) {
       } else {
         sorted.push_back(symbol);
       }
+      if (const auto *details{symbol->detailsIf<GenericDetails>()}) {
+        uses.insert(uses.end(), details->uses().begin(), details->uses().end());
+      }
     }
   }
   sorted.insert(sorted.end(), namelist.begin(), namelist.end());
@@ -433,7 +462,6 @@ SymbolVector CollectSymbols(const Scope &scope) {
     sorted.push_back(*pair.second);
   }
   std::sort(sorted.end() - commonSize, sorted.end());
-  return sorted;
 }
 
 void PutEntity(llvm::raw_ostream &os, const Symbol &symbol) {
@@ -743,7 +771,7 @@ Scope *ModFileReader::Read(const SourceName &name, Scope *ancestor) {
       return it->second->scope();
     }
   }
-  parser::Parsing parsing{context_.allSources()};
+  parser::Parsing parsing{context_.allCookedSources()};
   parser::Options options;
   options.isModuleFile = true;
   options.features.Enable(common::LanguageFeature::BackslashEscapes);
@@ -788,7 +816,6 @@ Scope *ModFileReader::Read(const SourceName &name, Scope *ancestor) {
   }
   auto &modSymbol{*it->second};
   modSymbol.set(Symbol::Flag::ModFile);
-  modSymbol.scope()->set_chars(parsing.cooked());
   return modSymbol.scope();
 }
 
@@ -825,7 +852,9 @@ void SubprogramSymbolCollector::Collect() {
   const auto &details{symbol_.get<SubprogramDetails>()};
   isInterface_ = details.isInterface();
   for (const Symbol *dummyArg : details.dummyArgs()) {
-    DoSymbol(DEREF(dummyArg));
+    if (dummyArg) {
+      DoSymbol(*dummyArg);
+    }
   }
   if (details.isFunction()) {
     DoSymbol(details.result());

@@ -19,7 +19,6 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Chrono.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
@@ -38,6 +37,8 @@
 namespace llvm {
 
 class MemoryBuffer;
+class MemoryBufferRef;
+class Twine;
 
 namespace vfs {
 
@@ -463,7 +464,8 @@ public:
   /// false if the file or directory already exists in the file system with
   /// different contents.
   bool addFileNoOwn(const Twine &Path, time_t ModificationTime,
-                    llvm::MemoryBuffer *Buffer, Optional<uint32_t> User = None,
+                    const llvm::MemoryBufferRef &Buffer,
+                    Optional<uint32_t> User = None,
                     Optional<uint32_t> Group = None,
                     Optional<llvm::sys::fs::file_type> Type = None,
                     Optional<llvm::sys::fs::perms> Perms = None);
@@ -748,6 +750,10 @@ public:
   void setExternalContentsPrefixDir(StringRef PrefixDir);
 
   StringRef getExternalContentsPrefixDir() const;
+
+  void setFallthrough(bool Fallthrough);
+
+  std::vector<llvm::StringRef> getRoots() const;
 
   void dump(raw_ostream &OS) const;
   void dumpEntry(raw_ostream &OS, Entry *E, int NumSpaces = 0) const;

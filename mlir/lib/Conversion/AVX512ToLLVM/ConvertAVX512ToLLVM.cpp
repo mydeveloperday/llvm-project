@@ -8,18 +8,14 @@
 
 #include "mlir/Conversion/AVX512ToLLVM/ConvertAVX512ToLLVM.h"
 
-#include "../PassDetail.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
-#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/AVX512/AVX512Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMAVX512Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
-#include "mlir/IR/Module.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 
 using namespace mlir;
 using namespace mlir::vector;
@@ -30,7 +26,7 @@ static Type getSrcVectorElementType(OpTy op) {
   return op.src().getType().template cast<VectorType>().getElementType();
 }
 
-// TODO(ntv, zinenko): Code is currently copy-pasted and adapted from the code
+// TODO: Code is currently copy-pasted and adapted from the code
 // 1-1 LLVM conversion. It would better if it were properly exposed in core and
 // reusable.
 /// Basic lowering implementation for one-to-one rewriting from AVX512 Ops to
@@ -58,8 +54,7 @@ matchAndRewriteOneToOne(const ConvertToLLVMPattern &lowering,
   if (numResults == 0)
     return rewriter.eraseOp(op), success();
   if (numResults == 1)
-    return rewriter.replaceOp(op, newOp.getOperation()->getResult(0)),
-           success();
+    return rewriter.replaceOp(op, newOp->getResult(0)), success();
 
   // Otherwise, it had been converted to an operation producing a structure.
   // Extract individual results from the structure and return them as list.
@@ -68,15 +63,14 @@ matchAndRewriteOneToOne(const ConvertToLLVMPattern &lowering,
   for (unsigned i = 0; i < numResults; ++i) {
     auto type = typeConverter.convertType(op->getResult(i).getType());
     results.push_back(rewriter.create<LLVM::ExtractValueOp>(
-        op->getLoc(), type, newOp.getOperation()->getResult(0),
-        rewriter.getI64ArrayAttr(i)));
+        op->getLoc(), type, newOp->getResult(0), rewriter.getI64ArrayAttr(i)));
   }
   rewriter.replaceOp(op, results);
   return success();
 }
 
 namespace {
-// TODO(ntv): Patterns are too verbose due to the fact that we have 1 op (e.g.
+// TODO: Patterns are too verbose due to the fact that we have 1 op (e.g.
 // MaskRndScaleOp) and different possible target ops. It would be better to take
 // a Functor so that all these conversions become 1-liners.
 struct MaskRndScaleOpPS512Conversion : public ConvertToLLVMPattern {
@@ -92,7 +86,7 @@ struct MaskRndScaleOpPS512Conversion : public ConvertToLLVMPattern {
       return failure();
     return matchAndRewriteOneToOne<MaskRndScaleOp,
                                    LLVM::x86_avx512_mask_rndscale_ps_512>(
-        *this, this->typeConverter, op, operands, rewriter);
+        *this, *getTypeConverter(), op, operands, rewriter);
   }
 };
 
@@ -109,7 +103,7 @@ struct MaskRndScaleOpPD512Conversion : public ConvertToLLVMPattern {
       return failure();
     return matchAndRewriteOneToOne<MaskRndScaleOp,
                                    LLVM::x86_avx512_mask_rndscale_pd_512>(
-        *this, this->typeConverter, op, operands, rewriter);
+        *this, *getTypeConverter(), op, operands, rewriter);
   }
 };
 
@@ -126,7 +120,7 @@ struct ScaleFOpPS512Conversion : public ConvertToLLVMPattern {
       return failure();
     return matchAndRewriteOneToOne<MaskScaleFOp,
                                    LLVM::x86_avx512_mask_scalef_ps_512>(
-        *this, this->typeConverter, op, operands, rewriter);
+        *this, *getTypeConverter(), op, operands, rewriter);
   }
 };
 
@@ -143,7 +137,7 @@ struct ScaleFOpPD512Conversion : public ConvertToLLVMPattern {
       return failure();
     return matchAndRewriteOneToOne<MaskScaleFOp,
                                    LLVM::x86_avx512_mask_scalef_pd_512>(
-        *this, this->typeConverter, op, operands, rewriter);
+        *this, *getTypeConverter(), op, operands, rewriter);
   }
 };
 } // namespace
@@ -158,35 +152,4 @@ void mlir::populateAVX512ToLLVMConversionPatterns(
                   ScaleFOpPS512Conversion,
                   ScaleFOpPD512Conversion>(ctx, converter);
   // clang-format on
-}
-
-namespace {
-struct ConvertAVX512ToLLVMPass
-    : public ConvertAVX512ToLLVMBase<ConvertAVX512ToLLVMPass> {
-  void runOnOperation() override;
-};
-} // namespace
-
-void ConvertAVX512ToLLVMPass::runOnOperation() {
-  // Convert to the LLVM IR dialect.
-  OwningRewritePatternList patterns;
-  LLVMTypeConverter converter(&getContext());
-  populateAVX512ToLLVMConversionPatterns(converter, patterns);
-  populateVectorToLLVMConversionPatterns(converter, patterns);
-  populateStdToLLVMConversionPatterns(converter, patterns);
-
-  ConversionTarget target(getContext());
-  target.addLegalDialect<LLVM::LLVMDialect>();
-  target.addLegalDialect<LLVM::LLVMAVX512Dialect>();
-  target.addIllegalDialect<avx512::AVX512Dialect>();
-  target.addDynamicallyLegalOp<FuncOp>(
-      [&](FuncOp op) { return converter.isSignatureLegal(op.getType()); });
-  if (failed(applyPartialConversion(getOperation(), target, patterns,
-                                    &converter))) {
-    signalPassFailure();
-  }
-}
-
-std::unique_ptr<OperationPass<ModuleOp>> mlir::createConvertAVX512ToLLVMPass() {
-  return std::make_unique<ConvertAVX512ToLLVMPass>();
 }

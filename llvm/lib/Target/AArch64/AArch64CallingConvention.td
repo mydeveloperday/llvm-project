@@ -10,9 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-/// CCIfAlign - Match of the original alignment of the arg
-class CCIfAlign<string Align, CCAction A> :
-  CCIf<!strconcat("ArgFlags.getOrigAlign() == ", Align), A>;
 /// CCIfBigEndian - Match only if we're in big endian mode.
 class CCIfBigEndian<CCAction A> :
   CCIf<"State.getMachineFunction().getDataLayout().isBigEndian()", A>;
@@ -383,6 +380,10 @@ def CSR_AArch64_AAPCS : CalleeSavedRegs<(add X19, X20, X21, X22, X23, X24,
                                            X25, X26, X27, X28, LR, FP,
                                            D8,  D9,  D10, D11,
                                            D12, D13, D14, D15)>;
+
+// A variant for treating X18 as callee saved, when interfacing with
+// code that needs X18 to be preserved.
+def CSR_AArch64_AAPCS_X18 : CalleeSavedRegs<(add X18, CSR_AArch64_AAPCS)>;
 
 // Win64 has unwinding codes for an (FP,LR) pair, save_fplr and save_fplr_x.
 // We put FP before LR, so that frame lowering logic generates (FP,LR) pairs,

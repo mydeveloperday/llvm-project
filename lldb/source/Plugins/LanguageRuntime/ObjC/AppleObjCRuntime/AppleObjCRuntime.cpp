@@ -122,7 +122,8 @@ bool AppleObjCRuntime::GetObjectDescription(Stream &strm, Value &value,
     }
   } else {
     // If it is not a pointer, see if we can make it into a pointer.
-    TypeSystemClang *ast_context = TypeSystemClang::GetScratch(*target);
+    TypeSystemClang *ast_context =
+        ScratchTypeSystemClang::GetForTarget(*target);
     if (!ast_context)
       return false;
 
@@ -137,7 +138,7 @@ bool AppleObjCRuntime::GetObjectDescription(Stream &strm, Value &value,
   arg_value_list.PushValue(value);
 
   // This is the return value:
-  TypeSystemClang *ast_context = TypeSystemClang::GetScratch(*target);
+  TypeSystemClang *ast_context = ScratchTypeSystemClang::GetForTarget(*target);
   if (!ast_context)
     return false;
 
@@ -250,7 +251,8 @@ Address *AppleObjCRuntime::GetPrintForDebuggerAddr() {
 
     contexts.GetContextAtIndex(0, context);
 
-    m_PrintForDebugger_addr.reset(new Address(context.symbol->GetAddress()));
+    m_PrintForDebugger_addr =
+        std::make_unique<Address>(context.symbol->GetAddress());
   }
 
   return m_PrintForDebugger_addr.get();
@@ -346,8 +348,8 @@ bool AppleObjCRuntime::ReadObjCLibrary(const ModuleSP &module_sp) {
   // Maybe check here and if we have a handler already, and the UUID of this
   // module is the same as the one in the current module, then we don't have to
   // reread it?
-  m_objc_trampoline_handler_up.reset(
-      new AppleObjCTrampolineHandler(m_process->shared_from_this(), module_sp));
+  m_objc_trampoline_handler_up = std::make_unique<AppleObjCTrampolineHandler>(
+      m_process->shared_from_this(), module_sp);
   if (m_objc_trampoline_handler_up != nullptr) {
     m_read_objc_library = true;
     return true;
@@ -524,7 +526,7 @@ ThreadSP AppleObjCRuntime::GetBacktraceThreadFromException(
     return FailExceptionParsing("Failed to get synthetic value.");
 
   TypeSystemClang *clang_ast_context =
-      TypeSystemClang::GetScratch(*exception_sp->GetTargetSP());
+      ScratchTypeSystemClang::GetForTarget(*exception_sp->GetTargetSP());
   if (!clang_ast_context)
     return FailExceptionParsing("Failed to get scratch AST.");
   CompilerType objc_id =
